@@ -1,0 +1,24 @@
+# Environment
+.env
+
+# Binary
+/agent
+/cmd/agent/agent
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+vendor/
+
+PRD.md
+SRS.md
+CLAUDE.md
+
+*.png
