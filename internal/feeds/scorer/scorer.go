@@ -67,6 +67,7 @@ var rules = []keywordRule{
 		sentiment:  SentimentBearish,
 		confidence: 0.7,
 	},
+
 	// === POLITICS ===
 	{
 		keywords:   []string{"election", "vote", "president", "congress", "senate", "parliament", "democrat", "republican", "poll", "ballot"},
@@ -75,7 +76,7 @@ var rules = []keywordRule{
 		confidence: 0.6,
 	},
 	{
-		keywords:   []string{"trump", "biden", "harris", "musk", "zelensky", "putin", "xi jinping", "modi"},
+		keywords:   []string{"trump", "biden", "harris", "musk", "zelensky", "putin", "xi jinping", "modi", "netanyahu", "macron", "scholz"},
 		category:   CategoryPolitics,
 		sentiment:  SentimentNeutral,
 		confidence: 0.65,
@@ -86,44 +87,83 @@ var rules = []keywordRule{
 		sentiment:  SentimentBullish,
 		confidence: 0.75,
 	},
-	// === GEOPOLITICS ===
+
+	// === GEOPOLITICS — General ===
 	{
-		keywords:   []string{"war", "conflict", "missile", "attack", "invasion", "troops", "military", "nato", "sanction", "ceasefire", "peace deal"},
+		keywords:   []string{"war", "conflict", "missile", "invasion", "troops", "military", "nato", "sanction", "ceasefire", "peace deal", "diplomatic"},
 		category:   CategoryGeopolitics,
 		sentiment:  SentimentNeutral,
 		confidence: 0.65,
 	},
 	{
-		keywords:   []string{"ceasefire agreed", "peace deal", "negotiations successful", "troops withdrawal"},
+		keywords:   []string{"ceasefire agreed", "peace deal", "negotiations successful", "troops withdrawal", "de-escalation", "agreement signed"},
 		category:   CategoryGeopolitics,
 		sentiment:  SentimentBullish,
 		confidence: 0.75,
 	},
+
+	// === GEOPOLITICS — Bearish escalation ===
 	{
-		keywords:   []string{"war escalation", "nuclear", "airstrike", "explosion", "casualties"},
+		keywords: []string{
+			// Weapons & violence
+			"nuclear", "airstrike", "air strike", "explosion", "casualties", "killed",
+			"rocket attack", "drone strike", "drone attack", "bombing", "shelling",
+			"raid", "attack on", "strike on", "hit by", "destroyed",
+			// Middle East specific
+			"israel", "iran", "lebanon", "gaza", "hezbollah", "houthi", "houthis",
+			"natanz", "bushehr", "idf", "irgc",
+			// General escalation
+			"war escalation", "war declaration", "nuclear threat", "military operation",
+			"offensive launched", "ground invasion", "civilian casualties",
+		},
 		category:   CategoryGeopolitics,
 		sentiment:  SentimentBearish,
 		confidence: 0.75,
 	},
-	// === ECONOMY ===
+
+	// === ECONOMY — Central banks global ===
 	{
-		keywords:   []string{"fed", "federal reserve", "interest rate", "inflation", "cpi", "gdp", "recession", "rate hike", "rate cut", "fomc"},
+		keywords: []string{
+			// US
+			"fed", "federal reserve", "fomc", "powell",
+			// Europe
+			"ecb", "european central bank", "lagarde",
+			// UK
+			"bank of england", "boe", "bailey",
+			// Japan
+			"boj", "bank of japan", "ueda",
+			// China
+			"pboc", "people's bank of china",
+			// Australia/Others
+			"rba", "reserve bank",
+			// General
+			"interest rate", "inflation", "cpi", "gdp", "recession",
+			"rate hike", "rate cut", "quantitative easing", "qe", "tapering",
+		},
 		category:   CategoryEconomy,
 		sentiment:  SentimentNeutral,
 		confidence: 0.6,
 	},
 	{
-		keywords:   []string{"rate cut", "stimulus", "gdp growth", "employment rises", "market rally"},
+		keywords:   []string{"rate cut", "stimulus", "gdp growth", "employment rises", "market rally", "soft landing", "easing policy"},
 		category:   CategoryEconomy,
 		sentiment:  SentimentBullish,
 		confidence: 0.7,
 	},
 	{
-		keywords:   []string{"rate hike", "recession", "unemployment rises", "inflation surge", "market crash"},
+		keywords:   []string{"rate hike", "recession", "unemployment rises", "inflation surge", "market crash", "stagflation", "hard landing", "credit crunch"},
 		category:   CategoryEconomy,
 		sentiment:  SentimentBearish,
 		confidence: 0.7,
 	},
+	// ECB-specific: "do nothing" / hold = neutral
+	{
+		keywords:   []string{"ecb expected", "ecb holds", "hold rates", "rates unchanged", "no rate change", "pauses rate"},
+		category:   CategoryEconomy,
+		sentiment:  SentimentNeutral,
+		confidence: 0.65,
+	},
+
 	// === SPORTS ===
 	{
 		keywords:   []string{"match", "game", "championship", "world cup", "nba", "nfl", "soccer", "football", "tennis", "formula 1", "f1", "ufc", "mma"},

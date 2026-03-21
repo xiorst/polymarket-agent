@@ -68,6 +68,45 @@ func TestScore_Sports(t *testing.T) {
 	t.Logf("✅ category=%s sentiment=%.1f confidence=%.2f keywords=%v", sig.Category, sig.Sentiment, sig.Confidence, sig.Keywords)
 }
 
+func TestScore_ECB(t *testing.T) {
+	sig := ScoreText("THE ECB IS EXPECTED TO DO NOTHING WITH LIMITED VISIBILITY ON PRICES AND GROWTH", "marketfeed")
+	if sig == nil {
+		t.Fatal("expected signal for ECB news, got nil")
+	}
+	if sig.Category != CategoryEconomy {
+		t.Errorf("expected economy, got %s", sig.Category)
+	}
+	t.Logf("✅ category=%s sentiment=%.1f confidence=%.2f keywords=%v", sig.Category, sig.Sentiment, sig.Confidence, sig.Keywords)
+}
+
+func TestScore_IsraeliRaid(t *testing.T) {
+	sig := ScoreText("ISRAELI RAID ON THE BASIL HEIGHTS IN SOUTHERN LEBANON", "marketfeed")
+	if sig == nil {
+		t.Fatal("expected signal for Israeli raid, got nil")
+	}
+	if sig.Category != CategoryGeopolitics {
+		t.Errorf("expected geopolitics, got %s", sig.Category)
+	}
+	if sig.Sentiment != SentimentBearish {
+		t.Errorf("expected bearish, got %v", sig.Sentiment)
+	}
+	t.Logf("✅ category=%s sentiment=%.1f confidence=%.2f keywords=%v", sig.Category, sig.Sentiment, sig.Confidence, sig.Keywords)
+}
+
+func TestScore_NuclearNatanz(t *testing.T) {
+	sig := ScoreText("IAEA DIRECTOR RENEWS CALL FOR MILITARY RESTRAINT TO AVOID NUCLEAR ACCIDENT FOLLOWING NATANZ ATTACK", "marketfeed")
+	if sig == nil {
+		t.Fatal("expected signal, got nil")
+	}
+	if sig.Category != CategoryGeopolitics {
+		t.Errorf("expected geopolitics, got %s", sig.Category)
+	}
+	if sig.Sentiment != SentimentBearish {
+		t.Errorf("expected bearish, got %v", sig.Sentiment)
+	}
+	t.Logf("✅ category=%s sentiment=%.1f confidence=%.2f keywords=%v", sig.Category, sig.Sentiment, sig.Confidence, sig.Keywords)
+}
+
 func TestScore_NoMatch(t *testing.T) {
 	sig := ScoreText("Good morning everyone! Have a great day.", "marketfeed")
 	if sig != nil {
