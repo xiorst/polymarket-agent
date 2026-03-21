@@ -32,17 +32,19 @@ type PredictorWeights struct {
 	MeanReversion   float64
 	BidAskImbalance float64
 	SpreadPenalty   float64
+	ExternalSignal  float64 // weight for external news signal (0 = disabled)
 }
 
 func DefaultWeights() PredictorWeights {
 	return PredictorWeights{
-		Momentum:        0.25, // price trend continuation
-		Slope:           0.20, // trend direction & strength
-		VolumeAccel:     0.15, // trading activity confirmation
-		LiquidityTrend:  0.10, // market health
-		MeanReversion:   0.10, // contrarian value
-		BidAskImbalance: 0.15, // order book buyer/seller pressure
+		Momentum:        0.22, // price trend continuation
+		Slope:           0.18, // trend direction & strength
+		VolumeAccel:     0.13, // trading activity confirmation
+		LiquidityTrend:  0.09, // market health
+		MeanReversion:   0.09, // contrarian value
+		BidAskImbalance: 0.14, // order book buyer/seller pressure
 		SpreadPenalty:   0.05, // spread cost drag
+		ExternalSignal:  0.10, // external news context (Telegram feed)
 	}
 }
 
@@ -115,6 +117,7 @@ func (sp *StatisticalPredictor) predict(
 
 		confidence := sp.score(features, currentPrice)
 
+		hasExternal := features.ExternalSignal != nil
 		slog.Debug("ml prediction score",
 			"market", marketID,
 			"outcome", outcomeName,
@@ -127,6 +130,7 @@ func (sp *StatisticalPredictor) predict(
 			"spread_mean", features.SpreadMean,
 			"time_to_expiry_h", features.TimeToExpiry,
 			"price", currentPrice,
+			"has_external_signal", hasExternal,
 		)
 
 		if confidence > bestConfidence {
@@ -180,14 +184,38 @@ func (sp *StatisticalPredictor) score(f FeatureSet, currentPrice float64) float6
 	// A spread of 0.05 (5 cents) in a 0-1 market is very wide
 	spreadPenalty := sigmoid(-f.SpreadMean * 20) // negative: higher spread → lower score
 
+	// Signal 8: External News Signal (Telegram feed)
+	// Bullish news (+1.0) → boost confidence toward 1.0
+	// Bearish news (-1.0) → pull confidence toward 0.0
+	// Neutral / no signal → 0.5 (no effect on composite)
+	externalSignal := 0.5 // neutral default
+	if f.ExternalSignal != nil {
+		// Map sentiment [-1, +1] to [0, 1], weighted by signal confidence
+		sentimentScore := (float64(f.ExternalSignal.Sentiment) + 1.0) / 2.0
+		// Blend with neutral (0.5) based on signal confidence
+		// High confidence → closer to pure sentiment score
+		// Low confidence → closer to neutral
+		externalSignal = 0.5 + (sentimentScore-0.5)*f.ExternalSignal.Confidence
+
+		slog.Debug("external signal applied",
+			"category", f.ExternalSignal.Category,
+			"sentiment", f.ExternalSignal.Sentiment,
+			"confidence", f.ExternalSignal.Confidence,
+			"signal_score", externalSignal,
+			"keywords", f.ExternalSignal.Keywords,
+		)
+	}
+
 	// Composite weighted score
+	// Note: weights sum to 1.0 — ExternalSignal weight (0.10) redistributed from other signals
 	composite := w.Momentum*momentumSignal +
 		w.Slope*slopeSignal +
 		w.VolumeAccel*volumeSignal +
 		w.LiquidityTrend*liquiditySignal +
 		w.MeanReversion*meanRevSignal +
 		w.BidAskImbalance*imbalanceSignal +
-		w.SpreadPenalty*spreadPenalty
+		w.SpreadPenalty*spreadPenalty +
+		w.ExternalSignal*externalSignal
 
 	// Time-to-expiry penalty:
 	// Markets expiring in < 6 hours are highly uncertain — cap confidence.

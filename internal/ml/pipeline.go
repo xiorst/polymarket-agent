@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shopspring/decimal"
 	"github.com/x10rst/ai-agent-autonom/internal/config"
+	"github.com/x10rst/ai-agent-autonom/internal/feeds/scorer"
 	"github.com/x10rst/ai-agent-autonom/internal/models"
 )
 
@@ -42,10 +44,50 @@ type Pipeline struct {
 	cfg       config.MarketAnalysisConfig
 	db        *pgxpool.Pool
 	predictor Predictor
+
+	// externalMu guards externalSignals
+	externalMu      sync.RWMutex
+	externalSignals []*scorer.ExternalSignal // latest signals from Telegram feed
 }
 
 func NewPipeline(cfg config.MarketAnalysisConfig, db *pgxpool.Pool, predictor Predictor) *Pipeline {
 	return &Pipeline{cfg: cfg, db: db, predictor: predictor}
+}
+
+// IngestExternalSignal receives a signal from the Telegram feed and stores it
+// for use in the next prediction cycle. Thread-safe.
+func (p *Pipeline) IngestExternalSignal(sig scorer.ExternalSignal) {
+	p.externalMu.Lock()
+	defer p.externalMu.Unlock()
+
+	// Keep only signals from the last 30 minutes (stale news = no edge)
+	cutoff := time.Now().Add(-30 * time.Minute)
+	fresh := p.externalSignals[:0]
+	for _, s := range p.externalSignals {
+		if s.CreatedAt.After(cutoff) {
+			fresh = append(fresh, s)
+		}
+	}
+	fresh = append(fresh, &sig)
+	p.externalSignals = fresh
+
+	slog.Info("external signal ingested",
+		"category", sig.Category,
+		"sentiment", sig.Sentiment,
+		"confidence", sig.Confidence,
+		"keywords", sig.Keywords,
+		"source", sig.Source,
+	)
+}
+
+// latestExternalSignal returns the most recent external signal, or nil if none.
+func (p *Pipeline) latestExternalSignal() *scorer.ExternalSignal {
+	p.externalMu.RLock()
+	defer p.externalMu.RUnlock()
+	if len(p.externalSignals) == 0 {
+		return nil
+	}
+	return p.externalSignals[len(p.externalSignals)-1]
 }
 
 // GenerateSignals runs ML predictions on all active markets and returns
@@ -88,6 +130,12 @@ func (p *Pipeline) GenerateSignals(ctx context.Context) ([]models.Signal, error)
 				"required", MinSnapshotsRequired,
 			)
 			continue
+		}
+
+		// Attach latest external signal to snapshots (injected into FeatureSet during prediction)
+		extSig := p.latestExternalSignal()
+		for i := range snapshots {
+			snapshots[i].ExternalSignal = extSig
 		}
 
 		// Use PredictWithEndDate if the predictor supports it (for expiry penalty)

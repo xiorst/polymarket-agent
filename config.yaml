@@ -97,3 +97,13 @@ notification:
 multi_venue:
   enabled: false
   min_venues_for_split: 2
+
+# Telegram feed — external news context for ML predictor
+# Uses a second Telegram account (userbot) to monitor news channels.
+# Credentials via env: AGENT_TELEGRAM_FEED_API_ID, AGENT_TELEGRAM_FEED_API_HASH, AGENT_TELEGRAM_FEED_PHONE
+telegram_feed:
+  enabled: false           # Set to true when credentials are configured
+  session_file: "./data/tg_session.json"
+  poll_interval_seconds: 90
+  channels:
+    - marketfeed           # t.me/marketfeed — primary news source

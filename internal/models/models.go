@@ -139,6 +139,10 @@ type MarketSnapshot struct {
 	AskDepth        decimal.Decimal `json:"ask_depth" db:"ask_depth"`     // Total quantity on ask side
 	Spread          decimal.Decimal `json:"spread" db:"spread"`           // Best ask - best bid
 	CapturedAt      time.Time       `json:"captured_at" db:"captured_at"`
+
+	// ExternalSignal is not stored in DB — injected at prediction time from Telegram feed.
+	// Pointer so nil = no external context available.
+	ExternalSignal interface{} `json:"-" db:"-"`
 }
 
 type Signal struct {

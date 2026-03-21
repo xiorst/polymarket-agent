@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/shopspring/decimal"
+	"github.com/x10rst/ai-agent-autonom/internal/feeds/scorer"
 	"github.com/x10rst/ai-agent-autonom/internal/models"
 )
 
@@ -30,6 +31,10 @@ type FeatureSet struct {
 
 	// Time
 	TimeToExpiry float64 // Hours until market end_date — affects confidence penalty
+
+	// External context — signals from Telegram news feed
+	// Nil if no relevant news found for this market's category.
+	ExternalSignal *scorer.ExternalSignal
 }
 
 // ExtractFeatures computes statistical features from a series of market snapshots.
@@ -90,6 +95,14 @@ func ExtractFeatures(snapshots []models.MarketSnapshot, outcomeIdx int, marketEn
 
 	// Time to expiry
 	fs.TimeToExpiry = time.Until(marketEndDate).Hours()
+
+	// External signal — taken from the most recent snapshot (index 0 = latest)
+	// Pipeline injects this before calling ExtractFeatures
+	if len(snapshots) > 0 && snapshots[0].ExternalSignal != nil {
+		if sig, ok := snapshots[0].ExternalSignal.(*scorer.ExternalSignal); ok {
+			fs.ExternalSignal = sig
+		}
+	}
 
 	return fs
 }

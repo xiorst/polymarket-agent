@@ -23,6 +23,7 @@ type Config struct {
 	Reconciliation ReconciliationConfig `yaml:"reconciliation"`
 	Notification   NotificationConfig   `yaml:"notification"`
 	MultiVenue     MultiVenueConfig     `yaml:"multi_venue"`
+	TelegramFeed   TelegramFeedConfig   `yaml:"telegram_feed"`
 }
 
 type ServerConfig struct {
@@ -142,6 +143,16 @@ type MultiVenueConfig struct {
 	MinVenuesForSplit int  `yaml:"min_venues_for_split"`
 }
 
+type TelegramFeedConfig struct {
+	Enabled             bool     `yaml:"enabled"`
+	APIID               int      `yaml:"api_id"`
+	APIHash             string   `yaml:"api_hash"`
+	Phone               string   `yaml:"phone"`
+	SessionFile         string   `yaml:"session_file"`
+	PollIntervalSeconds int      `yaml:"poll_interval_seconds"`
+	Channels            []string `yaml:"channels"`
+}
+
 // Load reads config from YAML file and overrides with environment variables.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -185,6 +196,12 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("AGENT_TRADING_MODE"); v != "" {
 		c.Trading.Mode = v
+	}
+	if v := os.Getenv("AGENT_TELEGRAM_FEED_API_HASH"); v != "" {
+		c.TelegramFeed.APIHash = v
+	}
+	if v := os.Getenv("AGENT_TELEGRAM_FEED_PHONE"); v != "" {
+		c.TelegramFeed.Phone = v
 	}
 }
 
