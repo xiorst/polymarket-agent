@@ -203,6 +203,21 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("AGENT_TELEGRAM_FEED_PHONE"); v != "" {
 		c.TelegramFeed.Phone = v
 	}
+	if v := os.Getenv("AGENT_TELEGRAM_FEED_API_ID"); v != "" {
+		fmt.Sscanf(v, "%d", &c.TelegramFeed.APIID)
+	}
+	if v := os.Getenv("AGENT_TELEGRAM_FEED_ENABLED"); v == "true" {
+		c.TelegramFeed.Enabled = true
+	}
+	if v := os.Getenv("AGENT_SERVER_API_KEY"); v != "" {
+		c.Server.APIKey = v
+	}
+	if v := os.Getenv("AGENT_BLOCKCHAIN_POLYMARKET_API_KEY"); v != "" {
+		c.Blockchain.PolymarketAPIKey = v
+	}
+	if v := os.Getenv("AGENT_BLOCKCHAIN_CTF_EXCHANGE_ADDRESS"); v != "" {
+		c.Blockchain.CTFExchangeAddress = v
+	}
 }
 
 func (c *Config) validate() error {

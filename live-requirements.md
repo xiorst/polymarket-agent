@@ -151,10 +151,12 @@ REVIEW:
 EXTERNAL CONTEXT (Telegram Feed):
 [x] 11. Dapat api_id + api_hash dari second account ✅
 [x] 11. Second account sudah joined marketfeed + channel relevan ✅
-[ ] 11. Implementasi package internal/feeds/telegram/ dengan gotd/td
-[ ] 11. Implementasi keyword extraction + sentiment scoring
-[ ] 11. Wire ExternalSignal ke FeatureSet ML predictor
-[ ] 11. Test userbot read-only sebelum connect ke live pipeline
+[x] 11. Implementasi package internal/feeds/telegram/ dengan gotd/td ✅
+[x] 11. Implementasi keyword extraction + sentiment scoring ✅ (internal/feeds/scorer/)
+[x] 11. Wire ExternalSignal ke FeatureSet ML predictor ✅
+[ ] 11. Auth session first run — jalankan agent, masukkan OTP second account Telegram
+[ ] 11. Tambah config feeds ke config.yaml (channels, poll_interval, session_file)
+[ ] 11. Test userbot read-only live dengan marketfeed channel
 
 REKOMENDASI TAMBAHAN:
 [ ] Test dengan modal minimal ($20) selama 2 minggu sebelum naikkan

@@ -16,6 +16,8 @@ import (
 	"github.com/x10rst/ai-agent-autonom/internal/blockchain"
 	"github.com/x10rst/ai-agent-autonom/internal/config"
 	"github.com/x10rst/ai-agent-autonom/internal/database"
+	"github.com/x10rst/ai-agent-autonom/internal/feeds/scorer"
+	"github.com/x10rst/ai-agent-autonom/internal/feeds/telegram"
 	"github.com/x10rst/ai-agent-autonom/internal/logger"
 	"github.com/x10rst/ai-agent-autonom/internal/market"
 	"github.com/x10rst/ai-agent-autonom/internal/market/polymarket"
@@ -230,6 +232,72 @@ func main() {
 			}
 		}
 	}()
+
+	// Start Telegram feed (external news context for ML predictor)
+	if cfg.TelegramFeed.Enabled {
+		feedCfg := telegram.FeedConfig{
+			APIID:        cfg.TelegramFeed.APIID,
+			APIHash:      cfg.TelegramFeed.APIHash,
+			Phone:        cfg.TelegramFeed.Phone,
+			SessionFile:  cfg.TelegramFeed.SessionFile,
+			Channels:     cfg.TelegramFeed.Channels,
+			PollInterval: time.Duration(cfg.TelegramFeed.PollIntervalSeconds) * time.Second,
+		}
+
+		feed := telegram.NewFeed(feedCfg, func(msg telegram.Message) *telegram.ExternalSignal {
+			sig := scorer.ScoreText(msg.Text, msg.ChannelUsername)
+			if sig == nil {
+				return nil
+			}
+			return &telegram.ExternalSignal{
+				Category:   telegram.Category(sig.Category),
+				Sentiment:  telegram.Sentiment(sig.Sentiment),
+				Confidence: sig.Confidence,
+				Keywords:   sig.Keywords,
+				Source:     sig.Source,
+				RawText:    sig.RawText,
+				CreatedAt:  sig.CreatedAt,
+			}
+		})
+
+		// Run feed in background
+		go func() {
+			if err := feed.Run(ctx); err != nil && err != context.Canceled {
+				slog.Error("telegram feed error", "error", err)
+			}
+		}()
+
+		// Ingest signals into ML pipeline
+		go func() {
+			sigCh := feed.Signals(ctx)
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case sig, ok := <-sigCh:
+					if !ok {
+						return
+					}
+					mlPipeline.IngestExternalSignal(scorer.ExternalSignal{
+						Category:   scorer.Category(sig.Category),
+						Sentiment:  scorer.Sentiment(sig.Sentiment),
+						Confidence: sig.Confidence,
+						Keywords:   sig.Keywords,
+						Source:     sig.Source,
+						RawText:    sig.RawText,
+						CreatedAt:  sig.CreatedAt,
+					})
+				}
+			}
+		}()
+
+		slog.Info("telegram feed started",
+			"channels", cfg.TelegramFeed.Channels,
+			"poll_interval", cfg.TelegramFeed.PollIntervalSeconds,
+		)
+	} else {
+		slog.Info("telegram feed disabled — set telegram_feed.enabled=true to activate")
+	}
 
 	// Send startup notification
 	notifier.Send(ctx, models.AlertInfo, "agent_started",
