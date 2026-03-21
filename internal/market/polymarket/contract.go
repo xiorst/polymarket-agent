@@ -2,13 +2,15 @@ package polymarket
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"fmt"
 	"log/slog"
 	"math/big"
+	"strings"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 	"github.com/x10rst/ai-agent-autonom/internal/models"
 )
 
@@ -18,22 +20,117 @@ const (
 	USDCPolygon               = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" // USDC (PoS) Polygon
 )
 
+// ctfExchangeABI is the relevant subset of the Polymarket CTF Exchange ABI.
+// Source: https://polygonscan.com/address/0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E#code
+//
+// Only fillOrder and cancelOrder are needed for trading. The full ABI can be used
+// if more functions are required in the future.
+const ctfExchangeABIJSON = `[
+  {
+    "name": "fillOrder",
+    "type": "function",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "components": [
+          {"name": "salt",          "type": "uint256"},
+          {"name": "maker",         "type": "address"},
+          {"name": "signer",        "type": "address"},
+          {"name": "taker",         "type": "address"},
+          {"name": "tokenId",       "type": "uint256"},
+          {"name": "makerAmount",   "type": "uint256"},
+          {"name": "takerAmount",   "type": "uint256"},
+          {"name": "expiration",    "type": "uint256"},
+          {"name": "nonce",         "type": "uint256"},
+          {"name": "feeRateBps",    "type": "uint256"},
+          {"name": "side",          "type": "uint8"},
+          {"name": "signatureType", "type": "uint8"}
+        ]
+      },
+      {"name": "fillAmount", "type": "uint256"},
+      {"name": "signature",  "type": "bytes"}
+    ],
+    "outputs": [
+      {"name": "makerAssetFilled", "type": "uint256"},
+      {"name": "takerAssetFilled", "type": "uint256"}
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "name": "cancelOrder",
+    "type": "function",
+    "inputs": [
+      {
+        "name": "order",
+        "type": "tuple",
+        "components": [
+          {"name": "salt",          "type": "uint256"},
+          {"name": "maker",         "type": "address"},
+          {"name": "signer",        "type": "address"},
+          {"name": "taker",         "type": "address"},
+          {"name": "tokenId",       "type": "uint256"},
+          {"name": "makerAmount",   "type": "uint256"},
+          {"name": "takerAmount",   "type": "uint256"},
+          {"name": "expiration",    "type": "uint256"},
+          {"name": "nonce",         "type": "uint256"},
+          {"name": "feeRateBps",    "type": "uint256"},
+          {"name": "side",          "type": "uint8"},
+          {"name": "signatureType", "type": "uint8"}
+        ]
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  }
+]`
+
 // ContractProvider implements trading.MarketContractProvider for Polymarket's CTF Exchange.
 type ContractProvider struct {
 	exchangeAddress common.Address
+	parsedABI       abi.ABI
+	signer          *OrderSigner
 }
 
+// NewContractProvider creates a ContractProvider for read-only use (paper mode / market lookup).
+// For live order execution, use NewContractProviderWithSigner.
 func NewContractProvider(exchangeAddr string) *ContractProvider {
+	cp, _ := newContractProvider(exchangeAddr, nil)
+	return cp
+}
+
+// NewContractProviderWithSigner creates a ContractProvider capable of signing orders for live mode.
+func NewContractProviderWithSigner(exchangeAddr string, privateKey *ecdsa.PrivateKey) (*ContractProvider, error) {
+	if privateKey == nil {
+		return nil, fmt.Errorf("private key required for live order signing")
+	}
+	return newContractProvider(exchangeAddr, privateKey)
+}
+
+func newContractProvider(exchangeAddr string, privateKey *ecdsa.PrivateKey) (*ContractProvider, error) {
 	addr := exchangeAddr
 	if addr == "" {
 		addr = DefaultCTFExchangeAddress
 	}
-	return &ContractProvider{
-		exchangeAddress: common.HexToAddress(addr),
+
+	parsedABI, err := abi.JSON(strings.NewReader(ctfExchangeABIJSON))
+	if err != nil {
+		return nil, fmt.Errorf("parse CTF exchange ABI: %w", err)
 	}
+
+	cp := &ContractProvider{
+		exchangeAddress: common.HexToAddress(addr),
+		parsedABI:       parsedABI,
+	}
+
+	if privateKey != nil {
+		cp.signer = NewOrderSigner(privateKey)
+	}
+
+	return cp, nil
 }
 
-// GetMarketContract returns the CTF Exchange address (all markets go through the same contract).
+// GetMarketContract returns the CTF Exchange address (all Polymarket markets share one contract).
 func (cp *ContractProvider) GetMarketContract(_ context.Context, _ uuid.UUID) (common.Address, error) {
 	if cp.exchangeAddress == (common.Address{}) {
 		return common.Address{}, fmt.Errorf("CTF exchange address not configured")
@@ -41,93 +138,136 @@ func (cp *ContractProvider) GetMarketContract(_ context.Context, _ uuid.UUID) (c
 	return cp.exchangeAddress, nil
 }
 
-// BuildOrderCalldata encodes an order for the CTF Exchange.
+// BuildOrderCalldata encodes a fillOrder call using the real ABI + EIP-712 signature.
 //
-// The Polymarket CTF Exchange uses a signed order model (EIP-712).
-// This method builds the calldata for fillOrder(Order, Signature).
-//
-// Simplified ABI encoding — in production, use abigen-generated bindings.
+// For live mode: signer must be set (use NewContractProviderWithSigner).
+// For paper mode: signer may be nil; calldata is built without signature (never sent on-chain).
 func (cp *ContractProvider) BuildOrderCalldata(order *models.Order) ([]byte, error) {
-	// fillOrder selector: placeholder — actual selector depends on the deployed contract ABI
-	// For Polymarket's CTF Exchange: fillOrder(Order order, Signature sig)
-	//
-	// Order struct:
-	//   uint256 salt
-	//   address maker
-	//   address signer
-	//   address taker
-	//   uint256 tokenId
-	//   uint256 makerAmount
-	//   uint256 takerAmount
-	//   uint256 expiration
-	//   uint256 nonce
-	//   uint256 feeRateBps
-	//   uint8   side         (0=BUY, 1=SELL)
-	//   uint8   signatureType
+	// Resolve token ID from market/outcome (in production, this comes from the Polymarket API)
+	// For now, use a placeholder — the actual tokenId is returned by the CLOB API per market token.
+	tokenID := big.NewInt(0)
 
-	// Convert price & quantity to USDC amounts (6 decimals)
-	makerAmount := order.Price.Mul(order.Quantity).Mul(decimal.NewFromInt(1_000_000))
-	takerAmount := order.Quantity.Mul(decimal.NewFromInt(1_000_000))
+	if cp.signer == nil {
+		// Paper mode: build unsigned calldata for logging/simulation purposes only
+		return cp.buildUnsignedCalldata(order, tokenID)
+	}
 
+	// Live mode: build full signed order
+	takerAddr := common.Address{} // zero address = open order (anyone can fill)
+	ctfOrder, sig, err := cp.signer.BuildSignedOrder(order, tokenID, takerAddr)
+	if err != nil {
+		return nil, fmt.Errorf("build signed order: %w", err)
+	}
+
+	slog.Debug("built signed CTF order",
+		"maker", ctfOrder.Maker.Hex(),
+		"side", ctfOrder.Side,
+		"maker_amount", ctfOrder.MakerAmount,
+		"taker_amount", ctfOrder.TakerAmount,
+		"expiration", ctfOrder.Expiration,
+		"sig_len", len(sig),
+	)
+
+	return cp.encodefillOrder(ctfOrder, sig)
+}
+
+// buildUnsignedCalldata builds calldata without a signature (paper mode only).
+func (cp *ContractProvider) buildUnsignedCalldata(order *models.Order, tokenID *big.Int) ([]byte, error) {
 	var side uint8
-	if order.Side == models.OrderSideBuy {
-		side = 0
-	} else {
+	if order.Side == models.OrderSideSell {
 		side = 1
 	}
 
-	slog.Debug("building order calldata",
-		"side", side,
-		"maker_amount", makerAmount,
-		"taker_amount", takerAmount,
-		"outcome", order.Outcome,
-	)
+	usdcMul := big.NewInt(1_000_000)
+	priceF, _ := order.Price.Float64()
+	qtyF, _ := order.Quantity.Float64()
 
-	// Build ABI-encoded calldata
-	// In production, use github.com/ethereum/go-ethereum/accounts/abi for proper encoding
-	//
-	// For now, we encode a simplified representation:
-	// bytes4 selector + encoded params
+	makerAmount := new(big.Int).SetInt64(int64(priceF * float64(qtyF) * 1_000_000))
+	takerAmount := new(big.Int).SetInt64(int64(qtyF * 1_000_000))
+	_ = usdcMul
 
-	// Placeholder selector for fillOrder
-	selector := common.Hex2Bytes("d798eff6")
+	ctfOrder := &CTFOrder{
+		Salt:          big.NewInt(1),
+		Maker:         common.Address{},
+		Signer:        common.Address{},
+		Taker:         common.Address{},
+		TokenID:       tokenID,
+		MakerAmount:   makerAmount,
+		TakerAmount:   takerAmount,
+		Expiration:    big.NewInt(0),
+		Nonce:         big.NewInt(0),
+		FeeRateBps:    big.NewInt(0),
+		Side:          side,
+		SignatureType: 0,
+	}
 
-	// Encode side (uint8, padded to 32 bytes)
-	sidePadded := common.LeftPadBytes([]byte{side}, 32)
+	return cp.encodefillOrder(ctfOrder, []byte{})
+}
 
-	// Encode makerAmount (uint256)
-	makerBig := makerAmount.BigInt()
-	makerPadded := common.LeftPadBytes(makerBig.Bytes(), 32)
+// encodefillOrder packs the fillOrder ABI calldata using the parsed ABI.
+func (cp *ContractProvider) encodefillOrder(ctfOrder *CTFOrder, sig []byte) ([]byte, error) {
+	return cp.encodeCalldata("fillOrder", ctfOrder, sig)
+}
 
-	// Encode takerAmount (uint256)
-	takerBig := takerAmount.BigInt()
-	takerPadded := common.LeftPadBytes(takerBig.Bytes(), 32)
+func (cp *ContractProvider) encodeCalldata(method string, ctfOrder *CTFOrder, sig []byte) ([]byte, error) {
+	// Pack as Go struct matching the ABI tuple layout
+	type abiOrder struct {
+		Salt          *big.Int       `abi:"salt"`
+		Maker         common.Address `abi:"maker"`
+		Signer        common.Address `abi:"signer"`
+		Taker         common.Address `abi:"taker"`
+		TokenID       *big.Int       `abi:"tokenId"`
+		MakerAmount   *big.Int       `abi:"makerAmount"`
+		TakerAmount   *big.Int       `abi:"takerAmount"`
+		Expiration    *big.Int       `abi:"expiration"`
+		Nonce         *big.Int       `abi:"nonce"`
+		FeeRateBps    *big.Int       `abi:"feeRateBps"`
+		Side          uint8          `abi:"side"`
+		SignatureType uint8          `abi:"signatureType"`
+	}
 
-	// Encode expiration (1 hour from now)
-	expiration := big.NewInt(0) // 0 = no expiration
-	expirationPadded := common.LeftPadBytes(expiration.Bytes(), 32)
+	ao := abiOrder{
+		Salt:          ctfOrder.Salt,
+		Maker:         ctfOrder.Maker,
+		Signer:        ctfOrder.Signer,
+		Taker:         ctfOrder.Taker,
+		TokenID:       ctfOrder.TokenID,
+		MakerAmount:   ctfOrder.MakerAmount,
+		TakerAmount:   ctfOrder.TakerAmount,
+		Expiration:    ctfOrder.Expiration,
+		Nonce:         ctfOrder.Nonce,
+		FeeRateBps:    ctfOrder.FeeRateBps,
+		Side:          ctfOrder.Side,
+		SignatureType: ctfOrder.SignatureType,
+	}
 
-	data := make([]byte, 0, 4+32*4)
-	data = append(data, selector...)
-	data = append(data, sidePadded...)
-	data = append(data, makerPadded...)
-	data = append(data, takerPadded...)
-	data = append(data, expirationPadded...)
+	var data []byte
+	var err error
+
+	if method == "fillOrder" {
+		fillAmount := ctfOrder.TakerAmount
+		data, err = cp.parsedABI.Pack("fillOrder", ao, fillAmount, sig)
+	} else {
+		data, err = cp.parsedABI.Pack("cancelOrder", ao)
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("ABI pack %s: %w", method, err)
+	}
 
 	return data, nil
 }
 
-// BuildCancelCalldata encodes a cancel order request.
-func (cp *ContractProvider) BuildCancelCalldata(orderID uuid.UUID) ([]byte, error) {
-	// cancelOrder selector: placeholder
-	selector := common.Hex2Bytes("514fcac7")
+// BuildCancelCalldata encodes a cancelOrder call for a previously submitted order.
+// The full CTFOrder struct is needed because the contract cancels by order hash.
+func (cp *ContractProvider) BuildCancelCalldata(_ uuid.UUID) ([]byte, error) {
+	// To cancel we need the original CTFOrder struct.
+	// In production, this would be retrieved from the database where the signed order was stored.
+	// For now, return an error to signal that the order must be fetched first.
+	return nil, fmt.Errorf("cancel requires the original signed CTFOrder — fetch from DB first")
+}
 
-	// Encode orderID as bytes32
-	orderBytes := common.LeftPadBytes(orderID[:], 32)
-
-	data := make([]byte, 0, 4+32)
-	data = append(data, selector...)
-	data = append(data, orderBytes...)
-
-	return data, nil
+// BuildCancelCalldataFromOrder encodes cancelOrder calldata from a stored CTFOrder.
+func (cp *ContractProvider) BuildCancelCalldataFromOrder(ctfOrder *CTFOrder) ([]byte, error) {
+	return cp.encodeCalldata("cancelOrder", ctfOrder, nil)
 }

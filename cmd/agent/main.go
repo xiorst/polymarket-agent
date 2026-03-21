@@ -118,7 +118,14 @@ func main() {
 		}
 		defer chain.Close()
 
-		contractProvider := polymarket.NewContractProvider(cfg.Blockchain.CTFExchangeAddress)
+		// Build contract provider with EIP-712 signer using the hot wallet private key
+		contractProvider, err := polymarket.NewContractProviderWithSigner(
+			cfg.Blockchain.CTFExchangeAddress, chain.PrivateKey(),
+		)
+		if err != nil {
+			slog.Error("failed to initialize contract provider", "error", err)
+			os.Exit(1)
+		}
 		executor = trading.NewLiveExecutor(chain, db, cfg.Blockchain, cfg.Nonce, notifier, contractProvider)
 
 		reconciler = reliability.NewReconciler(cfg.Reconciliation, db, chain, notifier)
@@ -136,7 +143,7 @@ func main() {
 
 	// Initialize trading engine
 	engine := trading.NewEngine(
-		cfg.Trading, cfg.Risk, db, executor, riskMgr, cb, liqMonitor, notifier, mlPipeline,
+		cfg.Trading, cfg.Risk, db, executor, riskMgr, cb, liqMonitor, notifier, mlPipeline, marketProvider,
 	)
 
 	// Initialize resolution handler — only meaningful in live mode with a resolver
@@ -172,10 +179,23 @@ func main() {
 	// Start market data collector
 	go collector.Run(ctx)
 
-	// Start liquidity monitor
+	// Start liquidity monitor — queries active external market IDs from DB each tick
 	go liqMonitor.Run(ctx, func() []string {
-		// Return active market IDs — placeholder, in production query from DB
-		return []string{}
+		rows, err := db.Query(ctx,
+			"SELECT external_id FROM markets WHERE status = 'active' LIMIT 200")
+		if err != nil {
+			slog.Warn("liquidity monitor: failed to query active markets", "error", err)
+			return nil
+		}
+		defer rows.Close()
+		var ids []string
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err == nil {
+				ids = append(ids, id)
+			}
+		}
+		return ids
 	})
 
 	// Start live-only background services

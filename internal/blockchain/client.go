@@ -63,6 +63,12 @@ func (c *Client) Address() common.Address {
 	return c.address
 }
 
+// PrivateKey returns the ECDSA private key for EIP-712 order signing.
+// Returns nil in paper mode (no private key configured).
+func (c *Client) PrivateKey() *ecdsa.PrivateKey {
+	return c.privateKey
+}
+
 // GetBalance returns the ETH balance (for gas) in wei.
 func (c *Client) GetBalance(ctx context.Context) (*big.Int, error) {
 	return c.eth.BalanceAt(ctx, c.address, nil)

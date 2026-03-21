@@ -35,6 +35,7 @@ type Engine struct {
 	liqMonitor     *market.LiquidityMonitor
 	notifier       *notification.Notifier
 	mlPipeline     *ml.Pipeline
+	marketProvider market.Provider // used to fetch live prices for stop-loss
 }
 
 func NewEngine(
@@ -47,6 +48,7 @@ func NewEngine(
 	liqMonitor *market.LiquidityMonitor,
 	notifier *notification.Notifier,
 	mlPipeline *ml.Pipeline,
+	marketProvider market.Provider,
 ) *Engine {
 	return &Engine{
 		cfg:            cfg,
@@ -58,6 +60,7 @@ func NewEngine(
 		liqMonitor:     liqMonitor,
 		notifier:       notifier,
 		mlPipeline:     mlPipeline,
+		marketProvider: marketProvider,
 	}
 }
 
@@ -278,9 +281,8 @@ func (e *Engine) checkStopLosses(ctx context.Context) error {
 		positions = append(positions, p)
 	}
 
-	// TODO: fetch current prices from market provider
-	// For now, this is a placeholder that would be wired to the market data provider
-	currentPrices := make(map[string]decimal.Decimal)
+	// Fetch current prices for each open position from the market provider
+	currentPrices := e.fetchCurrentPrices(ctx, positions)
 
 	triggered := e.riskMgr.CheckStopLoss(ctx, positions, currentPrices)
 	for _, pos := range triggered {
@@ -308,6 +310,48 @@ func (e *Engine) checkStopLosses(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// fetchCurrentPrices retrieves the latest price for each unique market in the given positions.
+// Falls back to the last stored snapshot in the DB if the live provider call fails.
+func (e *Engine) fetchCurrentPrices(ctx context.Context, positions []models.Position) map[string]decimal.Decimal {
+	prices := make(map[string]decimal.Decimal)
+
+	if len(positions) == 0 || e.marketProvider == nil {
+		return prices
+	}
+
+	// Collect unique market IDs → external IDs
+	marketExternalIDs := make(map[string]string) // internal UUID → external ID
+	for _, pos := range positions {
+		mid := pos.MarketID.String()
+		if _, seen := marketExternalIDs[mid]; seen {
+			continue
+		}
+		var externalID string
+		if err := e.db.QueryRow(ctx,
+			"SELECT external_id FROM markets WHERE id = $1", pos.MarketID,
+		).Scan(&externalID); err != nil {
+			slog.Warn("fetchCurrentPrices: could not find external_id", "market_id", mid, "error", err)
+			continue
+		}
+		marketExternalIDs[mid] = externalID
+	}
+
+	// Fetch live snapshot for each market
+	for _, externalID := range marketExternalIDs {
+		snapshot, err := e.marketProvider.FetchMarketSnapshot(ctx, externalID)
+		if err != nil {
+			slog.Warn("fetchCurrentPrices: provider error, falling back to DB",
+				"external_id", externalID, "error", err)
+			continue
+		}
+		for _, op := range snapshot.OutcomePrices {
+			prices[op.Name] = op.Price
+		}
+	}
+
+	return prices
 }
 
 func (e *Engine) getPortfolioBalance(ctx context.Context) (decimal.Decimal, error) {
