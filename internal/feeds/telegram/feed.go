@@ -12,6 +12,7 @@ import (
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
 	"github.com/gotd/td/tg"
+	"golang.org/x/term"
 )
 
 // Message represents a parsed message from a Telegram channel.
@@ -74,15 +75,14 @@ func (f *Feed) Run(ctx context.Context) error {
 
 	return f.client.Run(ctx, func(ctx context.Context) error {
 		// Auth flow
-		authClient := f.client.Auth()
-		status, err := authClient.Status(ctx)
+		status, err := f.client.Auth().Status(ctx)
 		if err != nil {
 			return fmt.Errorf("auth status: %w", err)
 		}
 
 		if !status.Authorized {
 			slog.Info("telegram: not authorized, starting auth flow")
-			if err := f.authenticate(ctx, authClient); err != nil {
+			if err := f.authenticate(ctx); err != nil {
 				return fmt.Errorf("authenticate: %w", err)
 			}
 		}
@@ -129,17 +129,25 @@ func (f *Feed) Signals(ctx context.Context) <-chan ExternalSignal {
 }
 
 // authenticate handles the Telegram login flow via phone + OTP.
-func (f *Feed) authenticate(ctx context.Context, authClient *telegram.Client) error {
-	flow := auth.NewFlow(
-		auth.CodeOnly(f.cfg.Phone, auth.CodeAuthenticatorFunc(func(ctx context.Context, _ *tg.AuthSentCode) (string, error) {
-			fmt.Print("Enter Telegram OTP code: ")
+func (f *Feed) authenticate(ctx context.Context) error {
+	codePrompt := auth.CodeAuthenticatorFunc(func(ctx context.Context, _ *tg.AuthSentCode) (string, error) {
+		fmt.Print("Enter Telegram OTP code: ")
+		// Use term.ReadPassword so code is not echoed (works on TTY)
+		b, err := term.ReadPassword(int(os.Stdin.Fd()))
+		if err != nil {
+			// Fallback to plain Scanln if not a TTY
 			var code string
-			_, err := fmt.Scanln(&code)
+			_, err = fmt.Scanln(&code)
 			return strings.TrimSpace(code), err
-		})),
+		}
+		return strings.TrimSpace(string(b)), nil
+	})
+
+	flow := auth.NewFlow(
+		auth.CodeOnly(f.cfg.Phone, codePrompt),
 		auth.SendCodeOptions{},
 	)
-	return authClient.IfNecessary(ctx, flow)
+	return f.client.Auth().IfNecessary(ctx, flow)
 }
 
 // pollLoop fetches recent messages from each monitored channel periodically.

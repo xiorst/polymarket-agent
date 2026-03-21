@@ -142,7 +142,7 @@ type MarketSnapshot struct {
 
 	// ExternalSignal is not stored in DB — injected at prediction time from Telegram feed.
 	// Pointer so nil = no external context available.
-	ExternalSignal interface{} `json:"-" db:"-"`
+	ExternalSignal interface{} `json:"-" db:"-"` // use *scorer.ExternalSignal via ml package
 }
 
 type Signal struct {
