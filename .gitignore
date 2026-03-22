@@ -1,9 +1,22 @@
 # Environment
 .env
 
-# Binary
+# Binaries
 /agent
+/tg-auth
+/tg-test
 /cmd/agent/agent
+/cmd/tg-auth/tg-auth
+/cmd/tg-test/tg-test
+
+# Session & sensitive data
+data/
+*.json
+
+# Internal docs (tidak untuk publik)
+BLUEPRINT.md
+live-requirements.md
+result.md
 
 # IDE
 .idea/
