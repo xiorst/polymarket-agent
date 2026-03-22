@@ -143,9 +143,23 @@ func (cp *ContractProvider) GetMarketContract(_ context.Context, _ uuid.UUID) (c
 // For live mode: signer must be set (use NewContractProviderWithSigner).
 // For paper mode: signer may be nil; calldata is built without signature (never sent on-chain).
 func (cp *ContractProvider) BuildOrderCalldata(order *models.Order) ([]byte, error) {
-	// Resolve token ID from market/outcome (in production, this comes from the Polymarket API)
-	// For now, use a placeholder — the actual tokenId is returned by the CLOB API per market token.
-	tokenID := big.NewInt(0)
+	// Resolve token ID from order.TokenID (set by trading engine from Polymarket API response).
+	// TokenID is the CLOB token ID for the specific outcome (YES/NO).
+	// If not set, order cannot be executed on-chain — return error in live mode.
+	var tokenID *big.Int
+	if order.TokenID != "" {
+		tokenID = new(big.Int)
+		if _, ok := tokenID.SetString(order.TokenID, 10); !ok {
+			return nil, fmt.Errorf("invalid token_id %q: must be a decimal integer", order.TokenID)
+		}
+	} else {
+		if cp.signer != nil {
+			// Live mode: token ID required
+			return nil, fmt.Errorf("order.TokenID is empty — fetch token_id from Polymarket CLOB API before placing live order")
+		}
+		// Paper mode: use zero (not sent on-chain)
+		tokenID = big.NewInt(0)
+	}
 
 	if cp.signer == nil {
 		// Paper mode: build unsigned calldata for logging/simulation purposes only

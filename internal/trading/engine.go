@@ -154,12 +154,16 @@ func (e *Engine) processSignal(ctx context.Context, signal models.Signal, portfo
 		return nil
 	}
 
+	// Resolve TokenID for this outcome from markets table (stored from API response)
+	tokenID := e.resolveTokenID(ctx, signal.MarketID, signal.PredictedOutcome)
+
 	order := &models.Order{
 		ID:             uuid.New(),
 		MarketID:       signal.MarketID,
 		Side:           side,
 		OrderType:      models.OrderTypeLimit,
 		Outcome:        signal.PredictedOutcome,
+		TokenID:        tokenID,
 		Price:          signal.MarketPrice,
 		Quantity:       quantity,
 		Status:         models.OrderStatusPending,
@@ -312,6 +316,38 @@ func (e *Engine) checkStopLosses(ctx context.Context) error {
 	return nil
 }
 
+// resolveTokenID looks up the Polymarket CLOB token_id for a specific outcome
+// from the most recent market snapshot stored in the database.
+func (e *Engine) resolveTokenID(ctx context.Context, marketID uuid.UUID, outcome string) string {
+	var outcomePrices []models.OutcomePrice
+	err := e.db.QueryRow(ctx, `
+		SELECT outcome_prices
+		FROM market_snapshots
+		WHERE market_id = $1
+		ORDER BY captured_at DESC
+		LIMIT 1
+	`, marketID).Scan(&outcomePrices)
+
+	if err != nil {
+		slog.Warn("resolveTokenID: no snapshot found", "market_id", marketID, "outcome", outcome)
+		return ""
+	}
+
+	for _, op := range outcomePrices {
+		if op.Name == outcome {
+			if op.TokenID != "" {
+				slog.Debug("resolveTokenID: found", "outcome", outcome, "token_id", op.TokenID)
+			} else {
+				slog.Warn("resolveTokenID: token_id empty in snapshot", "outcome", outcome)
+			}
+			return op.TokenID
+		}
+	}
+
+	slog.Warn("resolveTokenID: outcome not found in snapshot", "market_id", marketID, "outcome", outcome)
+	return ""
+}
+
 // fetchCurrentPrices retrieves the latest price for each unique market in the given positions.
 // Falls back to the last stored snapshot in the DB if the live provider call fails.
 func (e *Engine) fetchCurrentPrices(ctx context.Context, positions []models.Position) map[string]decimal.Decimal {
@@ -338,18 +374,57 @@ func (e *Engine) fetchCurrentPrices(ctx context.Context, positions []models.Posi
 		marketExternalIDs[mid] = externalID
 	}
 
-	// Fetch live snapshot for each market
+	// Fetch live snapshot for each market, fall back to latest DB snapshot on error
 	for _, externalID := range marketExternalIDs {
 		snapshot, err := e.marketProvider.FetchMarketSnapshot(ctx, externalID)
 		if err != nil {
-			slog.Warn("fetchCurrentPrices: provider error, falling back to DB",
+			slog.Warn("fetchCurrentPrices: provider error, falling back to DB snapshot",
 				"external_id", externalID, "error", err)
+
+			// Fallback: use most recent snapshot stored in DB
+			dbPrices := e.fetchPricesFromDB(ctx, externalID)
+			for k, v := range dbPrices {
+				prices[k] = v
+			}
 			continue
 		}
 		for _, op := range snapshot.OutcomePrices {
 			prices[op.Name] = op.Price
 		}
 	}
+
+	return prices
+}
+
+// fetchPricesFromDB retrieves the latest outcome prices from the most recent
+// market_snapshot stored in the database. Used as fallback when live API is unavailable.
+func (e *Engine) fetchPricesFromDB(ctx context.Context, externalID string) map[string]decimal.Decimal {
+	prices := make(map[string]decimal.Decimal)
+
+	// Get the latest snapshot for this market via external_id join
+	var outcomePrices []models.OutcomePrice
+	err := e.db.QueryRow(ctx, `
+		SELECT ms.outcome_prices
+		FROM market_snapshots ms
+		JOIN markets m ON ms.market_id = m.id
+		WHERE m.external_id = $1
+		ORDER BY ms.captured_at DESC
+		LIMIT 1
+	`, externalID).Scan(&outcomePrices)
+
+	if err != nil {
+		slog.Warn("fetchPricesFromDB: no snapshot found", "external_id", externalID, "error", err)
+		return prices
+	}
+
+	for _, op := range outcomePrices {
+		prices[op.Name] = op.Price
+	}
+
+	slog.Debug("fetchPricesFromDB: used DB fallback",
+		"external_id", externalID,
+		"outcomes", len(outcomePrices),
+	)
 
 	return prices
 }

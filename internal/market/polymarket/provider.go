@@ -104,8 +104,9 @@ func (p *Provider) FetchMarketSnapshot(ctx context.Context, externalID string) (
 	for _, t := range am.Tokens {
 		price, _ := decimal.NewFromString(t.Price)
 		outcomePrices = append(outcomePrices, models.OutcomePrice{
-			Name:  t.Outcome,
-			Price: price,
+			Name:    t.Outcome,
+			Price:   price,
+			TokenID: t.TokenID,
 		})
 	}
 
@@ -227,8 +228,9 @@ func normalizeMarket(am APIMarket) (models.Market, error) {
 	for _, t := range am.Tokens {
 		price, _ := decimal.NewFromString(t.Price)
 		outcomes = append(outcomes, models.OutcomePrice{
-			Name:  t.Outcome,
-			Price: price,
+			Name:    t.Outcome,
+			Price:   price,
+			TokenID: t.TokenID,
 		})
 	}
 

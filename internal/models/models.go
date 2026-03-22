@@ -124,8 +124,9 @@ type Market struct {
 }
 
 type OutcomePrice struct {
-	Name  string          `json:"name"`
-	Price decimal.Decimal `json:"price"`
+	Name    string          `json:"name"`
+	Price   decimal.Decimal `json:"price"`
+	TokenID string          `json:"token_id,omitempty"` // Polymarket CLOB token ID for this outcome
 }
 
 type MarketSnapshot struct {
@@ -160,6 +161,9 @@ type Order struct {
 	Side           OrderSide       `json:"side" db:"side"`
 	OrderType      OrderType       `json:"order_type" db:"order_type"`
 	Outcome        string          `json:"outcome" db:"outcome"`
+	// TokenID is the Polymarket CLOB token ID for this outcome (from API).
+	// Required for live on-chain order signing. Empty string = not yet resolved.
+	TokenID        string          `json:"token_id" db:"token_id"`
 	Price          decimal.Decimal `json:"price" db:"price"`         // Requested price
 	Quantity       decimal.Decimal `json:"quantity" db:"quantity"`   // Requested quantity
 	FillPrice      decimal.Decimal `json:"fill_price" db:"fill_price"`       // Actual fill price (after slippage)
