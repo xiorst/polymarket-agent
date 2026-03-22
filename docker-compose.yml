@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: ${AGENT_DATABASE_PASSWORD:-agent_dev_pass}
       POSTGRES_DB: trading_agent
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -23,6 +23,8 @@ services:
     ports:
       - "8080:8080"
     environment:
+      - AGENT_DATABASE_HOST=db
+      - AGENT_DATABASE_PORT=5432
       - AGENT_DATABASE_PASSWORD=${AGENT_DATABASE_PASSWORD:-agent_dev_pass}
       - AGENT_SERVER_API_KEY=${AGENT_SERVER_API_KEY:-}
       - AGENT_BLOCKCHAIN_PRIVATE_KEY=${AGENT_BLOCKCHAIN_PRIVATE_KEY:-}

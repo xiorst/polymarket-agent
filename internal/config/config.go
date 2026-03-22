@@ -179,6 +179,12 @@ func (c *Config) applyEnvOverrides() {
 	if v := os.Getenv("AGENT_DATABASE_PASSWORD"); v != "" {
 		c.Database.Password = v
 	}
+	if v := os.Getenv("AGENT_DATABASE_HOST"); v != "" {
+		c.Database.Host = v
+	}
+	if v := os.Getenv("AGENT_DATABASE_PORT"); v != "" {
+		fmt.Sscanf(v, "%d", &c.Database.Port)
+	}
 	if v := os.Getenv("AGENT_BLOCKCHAIN_PRIVATE_KEY"); v != "" {
 		c.Blockchain.PrivateKey = v
 	}
