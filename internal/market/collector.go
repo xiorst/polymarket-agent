@@ -92,6 +92,12 @@ func (c *Collector) collect(ctx context.Context) {
 	slog.Debug("fetched active markets", "count", len(markets))
 
 	for _, m := range markets {
+		// Skip markets with no outcomes (incomplete API response)
+		if len(m.Outcomes) == 0 {
+			slog.Debug("skipping market with no outcomes", "external_id", m.ExternalID)
+			continue
+		}
+
 		// Upsert market — get the internal UUID back
 		marketID, err := c.upsertMarket(ctx, &m)
 		if err != nil {
