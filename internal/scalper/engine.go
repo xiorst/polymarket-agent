@@ -126,13 +126,13 @@ func (e *Engine) runCycle(ctx context.Context) error {
 			e.tryEntry(ctx, market, snapUp, snapDown)
 		}
 
-		// d. When market < 60s from end: force close and wait
+		// d. When market < 60s from end: force close and wait for next window
 		if remaining < 60*time.Second {
 			slog.Info("market nearing end — closing all positions", "remaining", remaining)
 			e.exits.CloseAll(ctx, snapshots)
 
-			// Sleep until market is fully past, then start new cycle
-			sleepUntil := market.EndTime.Add(5 * time.Second)
+			// Sleep until market is fully past, then wait for next window to open
+			sleepUntil := market.EndTime.Add(3 * time.Second)
 			sleepDur := time.Until(sleepUntil)
 			if sleepDur > 0 {
 				select {
@@ -141,7 +141,21 @@ func (e *Engine) runCycle(ctx context.Context) error {
 				case <-time.After(sleepDur):
 				}
 			}
-			return nil
+
+			// Wait for next window to open (poll every 2s until acceptingOrders=true)
+			slog.Info("waiting for next 5m window to open...")
+			for {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
+				next, err := e.finder.FindActive(ctx)
+				if err == nil && next != nil && next.ConditionID != market.ConditionID {
+					slog.Info("new market window found", "slug", next.Slug, "endTime", next.EndTime)
+					return nil // triggers new runCycle with new market
+				}
+			}
 		}
 	}
 }
