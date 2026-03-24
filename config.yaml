@@ -61,9 +61,8 @@ liquidity:
   volume_profile_window: 168
 
 auto_withdraw:
-  enabled: true
-  safe_wallet_address: "" # Use env: AGENT_AUTO_WITHDRAW_SAFE_WALLET_ADDRESS
-  # Keep minimum $10 on hot wallet; withdraw profit above compounding plan threshold
+  enabled: false  # Disabled — fund dikelola internal Polymarket, withdraw manual oleh Irishdara
+  safe_wallet_address: ""
   min_hot_wallet_balance: 10.00
   check_interval_seconds: 300
 
@@ -107,3 +106,15 @@ telegram_feed:
   poll_interval_seconds: 90
   channels:
     - marketfeed           # t.me/marketfeed — primary news source
+
+scalper:
+  enabled: false
+  series_slug: "btc-up-or-down-5m"
+  trade_size: 1.0
+  total_capital: 3.0
+  take_profit_min: 0.02
+  take_profit_max: 0.05
+  stop_loss: 0.03
+  momentum_threshold: 0.6
+  builder_address: ""
+  signer_address: ""

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -27,6 +28,7 @@ import (
 	"github.com/x10rst/ai-agent-autonom/internal/reliability"
 	"github.com/x10rst/ai-agent-autonom/internal/resolution"
 	"github.com/x10rst/ai-agent-autonom/internal/risk"
+	"github.com/x10rst/ai-agent-autonom/internal/scalper"
 	"github.com/x10rst/ai-agent-autonom/internal/trading"
 	"github.com/x10rst/ai-agent-autonom/internal/withdraw"
 )
@@ -232,6 +234,32 @@ func main() {
 			}
 		}
 	}()
+
+	// Start scalper engine (BTC 5m prediction market scalper)
+	if cfg.Scalper.Enabled {
+		scalperCfg := &scalper.Config{
+			Enabled:           cfg.Scalper.Enabled,
+			SeriesSlug:        cfg.Scalper.SeriesSlug,
+			TradeSize:         cfg.Scalper.TradeSize,
+			TotalCapital:      cfg.Scalper.TotalCapital,
+			TakeProfitMin:     cfg.Scalper.TakeProfitMin,
+			TakeProfitMax:     cfg.Scalper.TakeProfitMax,
+			StopLoss:          cfg.Scalper.StopLoss,
+			MomentumThreshold: cfg.Scalper.MomentumThreshold,
+			APIKey:            cfg.Scalper.APIKey,
+			APISecret:         cfg.Scalper.APISecret,
+			APIPassphrase:     cfg.Scalper.APIPassphrase,
+			BuilderAddress:    cfg.Scalper.BuilderAddress,
+			SignerAddress:     cfg.Scalper.SignerAddress,
+		}
+		scalperEngine := scalper.NewEngine(scalperCfg)
+		go func() {
+			if err := scalperEngine.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("scalper engine stopped", "error", err)
+			}
+		}()
+		slog.Info("scalper engine started", "series", scalperCfg.SeriesSlug)
+	}
 
 	// Start Telegram feed (external news context for ML predictor)
 	if cfg.TelegramFeed.Enabled {

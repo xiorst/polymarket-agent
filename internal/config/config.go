@@ -24,6 +24,24 @@ type Config struct {
 	Notification   NotificationConfig   `yaml:"notification"`
 	MultiVenue     MultiVenueConfig     `yaml:"multi_venue"`
 	TelegramFeed   TelegramFeedConfig   `yaml:"telegram_feed"`
+	Scalper        ScalperConfig        `yaml:"scalper"`
+}
+
+// ScalperConfig holds configuration for the BTC 5m scalper engine.
+type ScalperConfig struct {
+	Enabled           bool    `yaml:"enabled"`
+	SeriesSlug        string  `yaml:"series_slug"`
+	TradeSize         float64 `yaml:"trade_size"`
+	TotalCapital      float64 `yaml:"total_capital"`
+	TakeProfitMin     float64 `yaml:"take_profit_min"`
+	TakeProfitMax     float64 `yaml:"take_profit_max"`
+	StopLoss          float64 `yaml:"stop_loss"`
+	MomentumThreshold float64 `yaml:"momentum_threshold"`
+	APIKey            string  `yaml:"api_key"`
+	APISecret         string  `yaml:"api_secret"`
+	APIPassphrase     string  `yaml:"api_passphrase"`
+	BuilderAddress    string  `yaml:"builder_address"`
+	SignerAddress     string  `yaml:"signer_address"`
 }
 
 type ServerConfig struct {
@@ -223,6 +241,24 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("AGENT_BLOCKCHAIN_CTF_EXCHANGE_ADDRESS"); v != "" {
 		c.Blockchain.CTFExchangeAddress = v
+	}
+	if v := os.Getenv("AGENT_SCALPER_API_KEY"); v != "" {
+		c.Scalper.APIKey = v
+	}
+	if v := os.Getenv("AGENT_SCALPER_API_SECRET"); v != "" {
+		c.Scalper.APISecret = v
+	}
+	if v := os.Getenv("AGENT_SCALPER_API_PASSPHRASE"); v != "" {
+		c.Scalper.APIPassphrase = v
+	}
+	if v := os.Getenv("AGENT_SCALPER_ENABLED"); v == "true" {
+		c.Scalper.Enabled = true
+	}
+	if v := os.Getenv("AGENT_SCALPER_BUILDER_ADDRESS"); v != "" {
+		c.Scalper.BuilderAddress = v
+	}
+	if v := os.Getenv("AGENT_SCALPER_SIGNER_ADDRESS"); v != "" {
+		c.Scalper.SignerAddress = v
 	}
 }
 
