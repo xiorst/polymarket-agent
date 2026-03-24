@@ -14,8 +14,10 @@ import (
 )
 
 const (
-	wsEndpoint     = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
+	wsEndpoint      = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 	wsReconnectWait = 5 * time.Second
+	wsPingInterval  = 30 * time.Second
+	wsPongTimeout   = 10 * time.Second
 )
 
 // OrderBookSnapshot holds the best bid/ask and depth for a single token.
@@ -121,6 +123,32 @@ func (ob *OrderBook) connectAndListen(ctx context.Context, tokenIDs []string) er
 	}
 
 	slog.Info("orderbook ws connected", "tokens", tokenIDs)
+
+	// Setup pong handler dan ping ticker untuk keep-alive
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(wsPingInterval + wsPongTimeout))
+		return nil
+	})
+	conn.SetReadDeadline(time.Now().Add(wsPingInterval + wsPongTimeout))
+
+	// Ping goroutine
+	pingStop := make(chan struct{})
+	defer close(pingStop)
+	go func() {
+		ticker := time.NewTicker(wsPingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-pingStop:
+				return
+			case <-ticker.C:
+				conn.SetWriteDeadline(time.Now().Add(wsPongTimeout))
+				if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			}
+		}
+	}()
 
 	// Local full book state: map tokenID → side → price → size
 	bids := make(map[string]map[string]float64)
