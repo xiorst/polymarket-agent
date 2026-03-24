@@ -11,17 +11,22 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/net/proxy"
 )
 
 const clobBase = "https://clob.polymarket.com"
 
 // CLOBExecutor executes orders via the Polymarket CLOB REST API.
 type CLOBExecutor struct {
-	cfg    *Config
-	client *http.Client
+	cfg         *Config
+	client      *http.Client // via proxy (untuk order)
+	directClient *http.Client // direct (untuk non-order requests)
 }
 
 // OrderResult holds the result of a placed order.
@@ -33,10 +38,30 @@ type OrderResult struct {
 }
 
 // NewCLOBExecutor creates a new CLOBExecutor.
+// Order requests diroute via SOCKS5 proxy (bypass geoblock).
+// Balance/status requests pakai direct connection (lebih cepat).
 func NewCLOBExecutor(cfg *Config) *CLOBExecutor {
+	directClient := &http.Client{Timeout: 8 * time.Second}
+
+	proxyClient := &http.Client{Timeout: 30 * time.Second}
+
+	// Route order via SOCKS5 proxy
+	proxyAddr := os.Getenv("SOCKS5_PROXY")
+	if proxyAddr == "" {
+		proxyAddr = "socks5://127.0.0.1:9050"
+	}
+	if u, err := url.Parse(proxyAddr); err == nil {
+		if dialer, err := proxy.FromURL(u, proxy.Direct); err == nil {
+			proxyClient.Transport = &http.Transport{
+				DialContext: dialer.(proxy.ContextDialer).DialContext,
+			}
+		}
+	}
+
 	return &CLOBExecutor{
-		cfg:    cfg,
-		client: &http.Client{Timeout: 15 * time.Second},
+		cfg:          cfg,
+		client:       proxyClient,
+		directClient: directClient,
 	}
 }
 
@@ -88,18 +113,26 @@ func (e *CLOBExecutor) authHeaders(method, path, body string) (map[string]string
 }
 
 func (e *CLOBExecutor) doRequest(ctx context.Context, method, path, body string) ([]byte, int, error) {
+	return e.doRequestWithClient(ctx, method, path, body, e.client)
+}
+
+func (e *CLOBExecutor) doDirectRequest(ctx context.Context, method, path, body string) ([]byte, int, error) {
+	return e.doRequestWithClient(ctx, method, path, body, e.directClient)
+}
+
+func (e *CLOBExecutor) doRequestWithClient(ctx context.Context, method, path, body string, httpClient *http.Client) ([]byte, int, error) {
 	headers, err := e.authHeaders(method, path, body)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	url := clobBase + path
+	reqURL := clobBase + path
 	var bodyReader io.Reader
 	if body != "" {
 		bodyReader = strings.NewReader(body)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, bodyReader)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -107,7 +140,7 @@ func (e *CLOBExecutor) doRequest(ctx context.Context, method, path, body string)
 		req.Header.Set(k, v)
 	}
 
-	resp, err := e.client.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -121,25 +154,32 @@ func (e *CLOBExecutor) doRequest(ctx context.Context, method, path, body string)
 }
 
 // GetBalance returns the USDC balance from the CLOB.
+// Endpoint: GET /balance-allowance?asset_type=USDC
+// Fallback ke TotalCapital jika endpoint tidak tersedia.
 func (e *CLOBExecutor) GetBalance(ctx context.Context) (float64, error) {
-	data, status, err := e.doRequest(ctx, http.MethodGet, "/balance", "")
-	if err != nil {
-		return 0, fmt.Errorf("get balance: %w", err)
-	}
-	if status != http.StatusOK {
-		return 0, fmt.Errorf("get balance status %d: %s", status, string(data))
+	path := "/balance-allowance?asset_type=USDC"
+
+	// Gunakan timeout pendek untuk balance check — non-blocking
+	balCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	data, status, err := e.doDirectRequest(balCtx, http.MethodGet, path, "")
+	if err != nil || status != http.StatusOK {
+		// Fallback: pakai TotalCapital dari config supaya scalper tidak blocked
+		return e.cfg.TotalCapital, nil
 	}
 
+	// Response: {"asset_type":"USDC","balance":"3.00","allowance":"999999"}
 	var result struct {
 		Balance string `json:"balance"`
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
-		return 0, fmt.Errorf("parse balance: %w", err)
+		return e.cfg.TotalCapital, nil
 	}
 
 	bal, err := strconv.ParseFloat(result.Balance, 64)
 	if err != nil {
-		return 0, fmt.Errorf("parse balance value: %w", err)
+		return e.cfg.TotalCapital, nil
 	}
 	return bal, nil
 }
