@@ -196,8 +196,8 @@ func (e *Engine) tryEntryWithSignal(ctx context.Context, market *ActiveMarket, s
 		"tradeSize", tradeSize,
 	)
 
-	// Place market buy
-	result, err := e.executor.PlaceMarketBuy(ctx, tokenID, tradeSize)
+	// Place market buy (price diperlukan untuk hitung takerAmount)
+	result, err := e.executor.PlaceMarketBuy(ctx, tokenID, tradeSize, signal.Price)
 	if err != nil {
 		slog.Error("failed to place entry order", "error", err)
 		return

@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -17,7 +19,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"golang.org/x/net/proxy"
+
+	"log/slog"
 )
 
 const clobBase = "https://clob.polymarket.com"
@@ -43,24 +48,23 @@ type OrderResult struct {
 func NewCLOBExecutor(cfg *Config) *CLOBExecutor {
 	directClient := &http.Client{Timeout: 8 * time.Second}
 
-	proxyClient := &http.Client{Timeout: 30 * time.Second}
+	orderClient := &http.Client{Timeout: 10 * time.Second}
 
-	// Route order via SOCKS5 proxy
+	// Route order via SOCKS5 proxy hanya jika SOCKS5_PROXY di-set
 	proxyAddr := os.Getenv("SOCKS5_PROXY")
-	if proxyAddr == "" {
-		proxyAddr = "socks5://127.0.0.1:9050"
-	}
-	if u, err := url.Parse(proxyAddr); err == nil {
-		if dialer, err := proxy.FromURL(u, proxy.Direct); err == nil {
-			proxyClient.Transport = &http.Transport{
-				DialContext: dialer.(proxy.ContextDialer).DialContext,
+	if proxyAddr != "" {
+		if u, err := url.Parse(proxyAddr); err == nil {
+			if dialer, err := proxy.FromURL(u, proxy.Direct); err == nil {
+				orderClient.Transport = &http.Transport{
+					DialContext: dialer.(proxy.ContextDialer).DialContext,
+				}
 			}
 		}
 	}
 
 	return &CLOBExecutor{
 		cfg:          cfg,
-		client:       proxyClient,
+		client:       orderClient,
 		directClient: directClient,
 	}
 }
@@ -102,10 +106,9 @@ func (e *CLOBExecutor) authHeaders(method, path, body string) (map[string]string
 		return nil, err
 	}
 	return map[string]string{
-		"POLY_ADDRESS":    e.cfg.BuilderAddress,
+		"POLY_ADDRESS":    e.cfg.SignerAddress, // L2 = signer/EOA address
 		"POLY_SIGNATURE":  sig,
 		"POLY_TIMESTAMP":  ts,
-		"POLY_NONCE":      "0",
 		"POLY_API_KEY":    e.cfg.APIKey,
 		"POLY_PASSPHRASE": e.cfg.APIPassphrase,
 		"Content-Type":    "application/json",
@@ -185,40 +188,82 @@ func (e *CLOBExecutor) GetBalance(ctx context.Context) (float64, error) {
 }
 
 // PlaceMarketBuy places a FOK market buy order for the given USDC amount.
-func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcAmount float64) (*OrderResult, error) {
-	makerAmt := strconv.FormatInt(int64(usdcAmount*1e6), 10)
-	salt := rand.Int63() //nolint:gosec
+// BUY: makerAmount = USDC spent (6 dec), takerAmount = shares received = makerAmount/price (6 dec)
+func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcAmount float64, price float64) (*OrderResult, error) {
+	saltVal := big.NewInt(rand.Int63()) //nolint:gosec
+
+	tokenIDBig, ok := new(big.Int).SetString(tokenID, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid tokenID: %s", tokenID)
+	}
+
+	if price <= 0 || price >= 1 {
+		return nil, fmt.Errorf("invalid price: %f (must be 0 < price < 1)", price)
+	}
+
+	// Round price to 2 decimal places (tick size 0.01)
+	price = math.Round(price*100) / 100
+
+	// makerAmount = USDC (6 decimals)
+	makerAmtInt := int64(usdcAmount * 1e6)
+	// takerAmount = shares = USDC / price (6 decimals), rounded down
+	takerAmtRaw := (usdcAmount / price) * 1e6
+	takerAmtInt := int64(math.Floor(takerAmtRaw))
+
+	o := &OrderStruct{
+		Salt:          saltVal,
+		Maker:         common.HexToAddress(e.cfg.BuilderAddress),
+		Signer:        common.HexToAddress(e.cfg.SignerAddress),
+		Taker:         common.HexToAddress("0x0000000000000000000000000000000000000000"),
+		TokenID:       tokenIDBig,
+		MakerAmount:   big.NewInt(makerAmtInt),
+		TakerAmount:   big.NewInt(takerAmtInt),
+		Expiration:    big.NewInt(0),
+		Nonce:         big.NewInt(0),
+		FeeRateBps:    big.NewInt(0),
+		Side:          0, // BUY = 0
+		SignatureType: 1, // POLY_PROXY = 1 (OAuth/Proxy wallet)
+	}
+
+	sig, err := signOrder(o, e.cfg.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("sign order: %w", err)
+	}
 
 	order := map[string]interface{}{
-		"salt":          strconv.FormatInt(salt, 10),
-		"maker":         e.cfg.BuilderAddress,
-		"signer":        e.cfg.SignerAddress,
+		"salt":          saltVal.Int64(), // integer per Polymarket spec
+		"maker":         strings.ToLower(e.cfg.BuilderAddress),
+		"signer":        strings.ToLower(e.cfg.SignerAddress),
 		"taker":         "0x0000000000000000000000000000000000000000",
 		"tokenId":       tokenID,
-		"makerAmount":   makerAmt,
-		"takerAmount":   "0",
+		"makerAmount":   strconv.FormatInt(makerAmtInt, 10),
+		"takerAmount":   strconv.FormatInt(takerAmtInt, 10),
 		"expiration":    "0",
 		"nonce":         "0",
 		"feeRateBps":    "0",
-		"side":          "BUY",
-		"signatureType": 2,
-		"signature":     "0x",
+		"side":          "BUY", // string per Polymarket JSON spec
+		"signatureType": 1,     // POLY_PROXY
+		"signature":     sig,
 	}
 
 	payload := map[string]interface{}{
 		"order":     order,
 		"owner":     e.cfg.APIKey,
 		"orderType": "FOK",
+		"postOnly":  false,
 	}
 
 	bodyBytes, _ := json.Marshal(payload)
 	body := string(bodyBytes)
+
+	slog.Debug("placing order payload", "body", body)
 
 	data, status, err := e.doRequest(ctx, http.MethodPost, "/order", body)
 	if err != nil {
 		return nil, fmt.Errorf("place market buy: %w", err)
 	}
 	if status != http.StatusOK && status != http.StatusCreated {
+		slog.Debug("order response", "status", status, "body", string(data))
 		return nil, fmt.Errorf("place market buy status %d: %s", status, string(data))
 	}
 

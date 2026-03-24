@@ -251,6 +251,7 @@ func main() {
 			APIPassphrase:     cfg.Scalper.APIPassphrase,
 			BuilderAddress:    cfg.Scalper.BuilderAddress,
 			SignerAddress:     cfg.Scalper.SignerAddress,
+			PrivateKey:        cfg.Blockchain.PrivateKey,
 		}
 		scalperEngine := scalper.NewEngine(scalperCfg)
 		go func() {

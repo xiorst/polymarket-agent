@@ -15,4 +15,5 @@ type Config struct {
 	APIPassphrase     string
 	BuilderAddress    string
 	SignerAddress     string
+	PrivateKey        string // hex, untuk EIP-712 signing
 }
