@@ -70,6 +70,7 @@ func (d DatabaseConfig) DSN() string {
 
 type BlockchainConfig struct {
 	RPCURL               string  `yaml:"rpc_url"`
+	WSURL                string  `yaml:"ws_url"`
 	ChainID              int64   `yaml:"chain_id"`
 	PrivateKey           string  `yaml:"private_key"`
 	USDCContract         string  `yaml:"usdc_contract"`
@@ -208,6 +209,9 @@ func (c *Config) applyEnvOverrides() {
 	}
 	if v := os.Getenv("AGENT_BLOCKCHAIN_RPC_URL"); v != "" {
 		c.Blockchain.RPCURL = v
+	}
+	if v := os.Getenv("AGENT_BLOCKCHAIN_WS_URL"); v != "" {
+		c.Blockchain.WSURL = v
 	}
 	if v := os.Getenv("AGENT_AUTO_WITHDRAW_SAFE_WALLET_ADDRESS"); v != "" {
 		c.AutoWithdraw.SafeWalletAddress = v

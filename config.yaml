@@ -17,7 +17,8 @@ database:
   max_idle_conns: 5
 
 blockchain:
-  rpc_url: "https://polygon-rpc.com"
+  rpc_url: ""
+  ws_url: ""
   chain_id: 137              # Polygon mainnet — Polymarket berjalan di sini
   private_key: ""            # Use env: AGENT_BLOCKCHAIN_PRIVATE_KEY (live mode only)
   usdc_contract: "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174" # USDC (PoS) on Polygon

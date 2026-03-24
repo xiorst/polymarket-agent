@@ -204,15 +204,14 @@ func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcA
 	// Round price to 2 decimal places (tick size 0.01)
 	price = math.Round(price*100) / 100
 
-	// makerAmount = USDC, max 2 decimal places in USDC units
-	// e.g. $1.00 → 1000000, $1.50 → 1500000
-	makerUsdc := math.Round(usdcAmount*100) / 100
+	// GTC BUY: makerAmount (USDC) = max 4 decimal, takerAmount (shares) = max 2 decimal
+	// Ref: Polymarket error "buy orders maker amount supports max 4 decimals, taker max 2 decimals"
+	makerUsdc := math.Round(usdcAmount*10000) / 10000
 	makerAmtInt := int64(makerUsdc * 1e6)
 
-	// takerAmount = shares = USDC / price, max 4 decimal places in share units
-	// e.g. 1/0.37 = 2.702702... → 2.7027 → 2702700
+	// takerAmount = shares = USDC / price, max 2 decimal places
 	takerShares := usdcAmount / price
-	takerShares = math.Round(takerShares*10000) / 10000
+	takerShares = math.Round(takerShares*100) / 100
 	takerAmtInt := int64(takerShares * 1e6)
 
 	o := &OrderStruct{
@@ -254,7 +253,7 @@ func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcA
 	payload := map[string]interface{}{
 		"order":     order,
 		"owner":     e.cfg.APIKey,
-		"orderType": "FOK",
+		"orderType": "GTC", // GTC agar order masuk ke book jika tidak langsung match
 		"postOnly":  false,
 	}
 
