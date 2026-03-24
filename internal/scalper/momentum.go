@@ -2,41 +2,59 @@ package scalper
 
 // Signal represents a momentum signal derived from order book analysis.
 type Signal struct {
-	Side       string  // "UP", "DOWN", "NONE"
-	Confidence float64 // ratio distance from 0.5
-	Price      float64 // entry price (BestAsk of the winning side)
+	Side           string  // "UP", "DOWN", "NONE"
+	Confidence     float64 // imbalance ratio (0.5–1.0)
+	Price          float64 // entry price (BestAsk of the winning side)
+	ImbalanceRatio float64 // raw ratio for logging
 }
 
-// Analyze detects momentum from order book snapshots for the UP and DOWN tokens.
-// threshold: e.g. 0.6 → bid ratio >= 0.6 means UP momentum.
+// Analyze detects momentum via cross-token imbalance ratio.
+//
+// Logika:
+//   - upPressure  = Up.BidDepth  / (Up.BidDepth  + Down.BidDepth)
+//   - downPressure = Down.BidDepth / (Up.BidDepth + Down.BidDepth)
+//
+// Kalau upPressure >= threshold (default 0.65) → banyak orang mau beli UP → signal UP
+// Kalau downPressure >= threshold → signal DOWN
+//
+// Tambahan filter:
+//   - Total liquidity (semua depth) >= minLiquidity → hindari pasar terlalu tipis
+//   - BestAsk harus > 0 (ada seller) sebelum entry
 func Analyze(snapUp, snapDown OrderBookSnapshot, threshold float64) Signal {
-	totalUp := snapUp.BidDepth + snapUp.AskDepth
-	if totalUp == 0 {
+	const minLiquidity = 50.0 // minimum $50 total depth sebelum signal valid
+
+	totalDepth := snapUp.BidDepth + snapUp.AskDepth + snapDown.BidDepth + snapDown.AskDepth
+	if totalDepth < minLiquidity {
 		return Signal{Side: "NONE"}
 	}
-	bidRatioUp := snapUp.BidDepth / totalUp
 
-	if bidRatioUp >= threshold {
+	totalBid := snapUp.BidDepth + snapDown.BidDepth
+	if totalBid == 0 {
+		return Signal{Side: "NONE"}
+	}
+
+	upPressure := snapUp.BidDepth / totalBid
+	downPressure := snapDown.BidDepth / totalBid
+
+	// UP signal
+	if upPressure >= threshold && snapUp.BestAsk > 0 {
 		return Signal{
-			Side:       "UP",
-			Confidence: bidRatioUp,
-			Price:      snapUp.BestAsk,
+			Side:           "UP",
+			Confidence:     upPressure,
+			Price:          snapUp.BestAsk,
+			ImbalanceRatio: upPressure,
 		}
 	}
 
-	totalDown := snapDown.BidDepth + snapDown.AskDepth
-	if totalDown == 0 {
-		return Signal{Side: "NONE"}
-	}
-	bidRatioDown := snapDown.BidDepth / totalDown
-
-	if bidRatioDown >= threshold {
+	// DOWN signal
+	if downPressure >= threshold && snapDown.BestAsk > 0 {
 		return Signal{
-			Side:       "DOWN",
-			Confidence: bidRatioDown,
-			Price:      snapDown.BestAsk,
+			Side:           "DOWN",
+			Confidence:     downPressure,
+			Price:          snapDown.BestAsk,
+			ImbalanceRatio: downPressure,
 		}
 	}
 
-	return Signal{Side: "NONE"}
+	return Signal{Side: "NONE", ImbalanceRatio: upPressure}
 }

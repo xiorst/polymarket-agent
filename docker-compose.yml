@@ -41,6 +41,7 @@ services:
       - AGENT_NOTIFICATION_TELEGRAM_BOT_TOKEN=${AGENT_NOTIFICATION_TELEGRAM_BOT_TOKEN:-}
       - AGENT_NOTIFICATION_TELEGRAM_CHAT_ID=${AGENT_NOTIFICATION_TELEGRAM_CHAT_ID:-}
       - AGENT_TRADING_MODE=${AGENT_TRADING_MODE:-paper}
+      - LOG_LEVEL=debug
     volumes:
       - ./config.yaml:/app/config.yaml:ro
     restart: unless-stopped

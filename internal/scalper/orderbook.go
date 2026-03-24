@@ -68,13 +68,25 @@ func (ob *OrderBook) Subscribe(ctx context.Context, tokenIDs ...string) error {
 
 // ----- internal WS logic -----
 
+// wsBookMsg is the initial snapshot format: array of these objects.
 type wsBookMsg struct {
 	Type    string    `json:"type"`
 	AssetID string    `json:"asset_id"`
 	Bids    []wsLevel `json:"bids"`
 	Asks    []wsLevel `json:"asks"`
-	// price_change fields
-	Side    string `json:"side"` // "BUY" or "SELL"
+}
+
+// wsPriceChangeWrapper is the delta update format:
+// {"market": "0x...", "price_changes": [...]}
+type wsPriceChangeWrapper struct {
+	Market       string           `json:"market"`
+	PriceChanges []wsPriceChange  `json:"price_changes"`
+}
+
+// wsPriceChange is a single price level update within price_changes.
+type wsPriceChange struct {
+	AssetID string `json:"asset_id"`
+	Side    string `json:"side"`  // "BUY" or "SELL"
 	Price   string `json:"price"`
 	Size    string `json:"size"`
 }
@@ -170,25 +182,24 @@ func (ob *OrderBook) connectAndListen(ctx context.Context, tokenIDs []string) er
 			return fmt.Errorf("ws read: %w", err)
 		}
 
-		// Messages may be arrays or single objects
-		// Try array first
-		var msgs []wsBookMsg
-		if json.Unmarshal(raw, &msgs) != nil {
-			// Try single object
-			var single wsBookMsg
-			if err := json.Unmarshal(raw, &single); err != nil {
-				continue
+		// Format 1: array of snapshots → [{"type":"book","asset_id":"...","bids":[...],"asks":[...]}]
+		var snapshots []wsBookMsg
+		if json.Unmarshal(raw, &snapshots) == nil && len(snapshots) > 0 && snapshots[0].AssetID != "" {
+			for _, msg := range snapshots {
+				if msg.Type == "book" || len(msg.Bids) > 0 || len(msg.Asks) > 0 {
+					ob.applySnapshot(msg, bids, asks)
+				}
 			}
-			msgs = []wsBookMsg{single}
+			continue
 		}
 
-		for _, msg := range msgs {
-			switch msg.Type {
-			case "book":
-				ob.applySnapshot(msg, bids, asks)
-			case "price_change":
-				ob.applyDelta(msg, bids, asks)
+		// Format 2: delta object → {"market":"0x...","price_changes":[...]}
+		var delta wsPriceChangeWrapper
+		if json.Unmarshal(raw, &delta) == nil && len(delta.PriceChanges) > 0 {
+			for _, pc := range delta.PriceChanges {
+				ob.applyPriceChange(pc, bids, asks)
 			}
+			continue
 		}
 	}
 }
@@ -225,30 +236,32 @@ func (ob *OrderBook) applySnapshot(msg wsBookMsg,
 	ob.rebuildSnapshot(tokenID, msg.Bids, msg.Asks)
 }
 
-func (ob *OrderBook) applyDelta(msg wsBookMsg,
+// applyPriceChange handles a single price_changes entry (delta update).
+func (ob *OrderBook) applyPriceChange(pc wsPriceChange,
 	bids, asks map[string]map[string]float64) {
 
-	tokenID := msg.AssetID
+	tokenID := pc.AssetID
 	if _, ok := bids[tokenID]; !ok {
-		return
+		// Token not in our map — init it
+		bids[tokenID] = make(map[string]float64)
+		asks[tokenID] = make(map[string]float64)
 	}
 
-	sz, _ := strconv.ParseFloat(msg.Size, 64)
-	if msg.Side == "BUY" {
+	sz, _ := strconv.ParseFloat(pc.Size, 64)
+	if pc.Side == "BUY" {
 		if sz == 0 {
-			delete(bids[tokenID], msg.Price)
+			delete(bids[tokenID], pc.Price)
 		} else {
-			bids[tokenID][msg.Price] = sz
+			bids[tokenID][pc.Price] = sz
 		}
 	} else {
 		if sz == 0 {
-			delete(asks[tokenID], msg.Price)
+			delete(asks[tokenID], pc.Price)
 		} else {
-			asks[tokenID][msg.Price] = sz
+			asks[tokenID][pc.Price] = sz
 		}
 	}
 
-	// Rebuild snapshot from current bid/ask maps
 	bidLevels := mapToLevels(bids[tokenID])
 	askLevels := mapToLevels(asks[tokenID])
 	ob.rebuildSnapshot(tokenID, bidLevels, askLevels)

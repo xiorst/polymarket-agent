@@ -7,7 +7,11 @@ import (
 )
 
 // Setup initializes the structured JSON logger with the given level.
+// If LOG_LEVEL env is set, it takes precedence over the level argument.
 func Setup(level string) *slog.Logger {
+	if envLevel := os.Getenv("LOG_LEVEL"); envLevel != "" {
+		level = envLevel
+	}
 	var lvl slog.Level
 	switch strings.ToLower(level) {
 	case "debug":

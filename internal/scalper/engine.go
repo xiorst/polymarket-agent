@@ -121,20 +121,30 @@ func (e *Engine) runCycle(ctx context.Context) error {
 		// b. Check exits
 		e.exits.CheckExits(ctx, snapshots, market.EndTime)
 
-		// c. Entry: only if no open position and capital available
-		if !e.exits.HasOpenPosition() && remaining > 60*time.Second {
-			e.tryEntry(ctx, market, snapUp, snapDown)
+		// c. Log imbalance ratio setiap cycle (untuk monitoring)
+		signal := Analyze(snapUp, snapDown, e.cfg.MomentumThreshold)
+		slog.Debug("order book imbalance",
+			"side", signal.Side,
+			"imbalanceRatio", fmt.Sprintf("%.3f", signal.ImbalanceRatio),
+			"upBid", fmt.Sprintf("%.2f", snapUp.BidDepth),
+			"downBid", fmt.Sprintf("%.2f", snapDown.BidDepth),
+			"remaining", remaining.Round(time.Second),
+		)
+
+		// e. Entry: only if signal valid, no open position, and capital available
+		if signal.Side != "NONE" && !e.exits.HasOpenPosition() && remaining > 60*time.Second {
+			e.tryEntryWithSignal(ctx, market, signal)
 		}
 
-		// d. When market < 60s from end: force close and wait for next window
+		// f. When market < 60s from end: force close and exit cycle
 		if remaining < 60*time.Second {
 			slog.Info("market nearing end — closing all positions", "remaining", remaining)
 			e.exits.CloseAll(ctx, snapshots)
 
-			// Sleep until market is fully past, then wait for next window to open
-			sleepUntil := market.EndTime.Add(3 * time.Second)
-			sleepDur := time.Until(sleepUntil)
+			// Sleep until window fully closes
+			sleepDur := time.Until(market.EndTime.Add(2 * time.Second))
 			if sleepDur > 0 {
+				slog.Info("sleeping until market closes", "sleepDur", sleepDur.Round(time.Second))
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -142,27 +152,14 @@ func (e *Engine) runCycle(ctx context.Context) error {
 				}
 			}
 
-			// Wait for next window to open (poll every 2s until acceptingOrders=true)
-			slog.Info("waiting for next 5m window to open...")
-			for {
-				select {
-				case <-ctx.Done():
-					return ctx.Err()
-				case <-time.After(2 * time.Second):
-				}
-				next, err := e.finder.FindActive(ctx)
-				if err == nil && next != nil && next.ConditionID != market.ConditionID {
-					slog.Info("new market window found", "slug", next.Slug, "endTime", next.EndTime)
-					return nil // triggers new runCycle with new market
-				}
-			}
+			slog.Info("market closed — starting new cycle")
+			return nil // runCycle loop akan fetch market window baru
 		}
 	}
 }
 
-// tryEntry analyzes momentum and places an entry order if signal is strong.
-func (e *Engine) tryEntry(ctx context.Context, market *ActiveMarket, snapUp, snapDown OrderBookSnapshot) {
-	signal := Analyze(snapUp, snapDown, e.cfg.MomentumThreshold)
+// tryEntryWithSignal places an entry order using a pre-computed signal.
+func (e *Engine) tryEntryWithSignal(ctx context.Context, market *ActiveMarket, signal Signal) {
 	if signal.Side == "NONE" || signal.Price <= 0 {
 		return
 	}
