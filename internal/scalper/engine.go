@@ -8,8 +8,12 @@ import (
 )
 
 const (
-	cycleInterval    = 2 * time.Second
-	marketWaitSleep  = 30 * time.Second
+	cycleInterval   = 2 * time.Second
+	marketWaitSleep = 30 * time.Second
+
+	// Setelah entry berhasil, jangan entry lagi di window yang sama
+	// (boleh entry di window berikutnya meski ada posisi open dari window lama)
+	entryCooldownPerWindow = true
 )
 
 // Engine is the main scalper engine that orchestrates market finding,
@@ -20,6 +24,11 @@ type Engine struct {
 	book     *OrderBook
 	executor *CLOBExecutor
 	exits    *ExitManager
+
+	// enteredThisWindow = true setelah 1 order berhasil placed di window aktif.
+	// Di-reset setiap kali runCycle() dipanggil (= window baru).
+	// Posisi dari window lama tetap dimonitor ExitManager — boleh entry window berikutnya.
+	enteredThisWindow bool
 }
 
 // NewEngine creates a new scalper Engine.
@@ -56,6 +65,9 @@ func (e *Engine) Run(ctx context.Context) error {
 
 // runCycle handles one full market lifecycle: find → subscribe → trade → exit → repeat.
 func (e *Engine) runCycle(ctx context.Context) error {
+	// Reset entry flag — setiap window baru boleh entry 1x
+	e.enteredThisWindow = false
+
 	// 1. Find active market
 	market, err := e.finder.FindActive(ctx)
 	if err != nil {
@@ -131,8 +143,8 @@ func (e *Engine) runCycle(ctx context.Context) error {
 			"remaining", remaining.Round(time.Second),
 		)
 
-		// e. Entry: only if signal valid, no open position, and capital available
-		if signal.Side != "NONE" && !e.exits.HasOpenPosition() && remaining > 60*time.Second {
+		// e. Entry: max 1x per window. Posisi open dari window lama tidak menghalangi.
+		if signal.Side != "NONE" && !e.enteredThisWindow && remaining > 60*time.Second {
 			e.tryEntryWithSignal(ctx, market, signal)
 		}
 
@@ -214,14 +226,32 @@ func (e *Engine) tryEntryWithSignal(ctx context.Context, market *ActiveMarket, s
 		return
 	}
 
+	// Lock window — tidak boleh entry lagi di window ini
+	e.enteredThisWindow = true
+
 	// Estimate shares from filled amount / entry price
 	shares := tradeSize / signal.Price
 	if result.FilledAmt > 0 {
 		shares = result.FilledAmt
 	}
 
-	// Place take-profit limit sell
-	tpPrice := signal.Price * (1 + e.cfg.TakeProfitMin)
+	// Take-profit: gunakan midpoint antara TakeProfitMin dan TakeProfitMax
+	// Default config: min=2%, max=5% → target 20-30% gain dari entry
+	// Harga prediction market 0–1, jadi TP harga = entry + (1-entry)*targetPct
+	// Contoh: entry 0.60, target +30% → TP = 0.60 + (1-0.60)*0.30 = 0.72
+	tpTargetPct := (e.cfg.TakeProfitMin + e.cfg.TakeProfitMax) / 2
+	tpPrice := signal.Price + (1-signal.Price)*tpTargetPct
+	if tpPrice > 0.98 {
+		tpPrice = 0.98 // max cap — 0.99+ sulit terfill
+	}
+
+	slog.Info("placing TP order",
+		"entryPrice", signal.Price,
+		"tpPrice", tpPrice,
+		"tpPct", fmt.Sprintf("+%.0f%%", tpTargetPct*100),
+		"shares", shares,
+	)
+
 	tpResult, err := e.executor.PlaceLimitSell(ctx, tokenID, shares, tpPrice)
 	if err != nil {
 		slog.Error("failed to place TP order", "error", err)

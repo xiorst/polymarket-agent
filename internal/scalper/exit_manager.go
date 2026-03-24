@@ -2,6 +2,7 @@ package scalper
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -79,18 +80,29 @@ func (m *ExitManager) CheckExits(ctx context.Context, snapshots map[string]Order
 			continue
 		}
 
-		currentPrice := snap.BestBid
+		currentPrice := snap.BestAsk // pakai BestAsk untuk cek exit (harga jual market)
+		if currentPrice <= 0 {
+			currentPrice = snap.BestBid
+		}
+		pnlPct := (currentPrice - pos.EntryPrice) / pos.EntryPrice
+
+		slog.Debug("position check",
+			"side", pos.Side,
+			"entry", pos.EntryPrice,
+			"current", currentPrice,
+			"pnl%", fmt.Sprintf("%+.1f%%", pnlPct*100),
+		)
 
 		// Check stop-loss
 		slPrice := pos.EntryPrice * (1 - m.cfg.StopLoss)
 		if currentPrice <= slPrice {
 			slog.Warn("stop-loss triggered",
-				"tokenID", pos.TokenID,
+				"side", pos.Side,
 				"entryPrice", pos.EntryPrice,
 				"currentPrice", currentPrice,
 				"slPrice", slPrice,
+				"pnl%", fmt.Sprintf("%.1f%%", pnlPct*100),
 			)
-			// Cancel TP order first
 			if pos.TPOrderID != "" {
 				if err := m.executor.CancelOrder(ctx, pos.TPOrderID); err != nil {
 					slog.Warn("cancel TP order failed", "orderID", pos.TPOrderID, "error", err)
@@ -100,7 +112,40 @@ func (m *ExitManager) CheckExits(ctx context.Context, snapshots map[string]Order
 			continue
 		}
 
-		// Check if TP order is filled
+		// Check market price TP: jika harga sudah naik ≥ TakeProfitMin dari entry,
+		// pindahkan TP ke harga sekarang (trailing) atau langsung market sell.
+		// Ini jadi backup kalau TP limit order tidak terisi.
+		tpMinPrice := pos.EntryPrice + (1-pos.EntryPrice)*m.cfg.TakeProfitMin
+		tpMaxPrice := pos.EntryPrice + (1-pos.EntryPrice)*m.cfg.TakeProfitMax
+
+		if currentPrice >= tpMaxPrice {
+			// Sudah lewat TP max → market sell langsung
+			slog.Info("take-profit MAX hit — force closing",
+				"side", pos.Side,
+				"entry", pos.EntryPrice,
+				"current", currentPrice,
+				"pnl%", fmt.Sprintf("+%.1f%%", pnlPct*100),
+			)
+			if pos.TPOrderID != "" {
+				_ = m.executor.CancelOrder(ctx, pos.TPOrderID)
+			}
+			m.forceClose(ctx, pos, snapshots)
+			continue
+		}
+
+		if currentPrice >= tpMinPrice && pos.TPOrderID == "" {
+			// TP limit order tidak ada (gagal place) → market sell sekarang
+			slog.Info("take-profit MIN hit, no TP order — force closing",
+				"side", pos.Side,
+				"entry", pos.EntryPrice,
+				"current", currentPrice,
+				"pnl%", fmt.Sprintf("+%.1f%%", pnlPct*100),
+			)
+			m.forceClose(ctx, pos, snapshots)
+			continue
+		}
+
+		// Check if TP limit order is filled
 		if pos.TPOrderID != "" {
 			status, err := m.executor.GetOrderStatus(ctx, pos.TPOrderID)
 			if err != nil {
@@ -110,12 +155,11 @@ func (m *ExitManager) CheckExits(ctx context.Context, snapshots map[string]Order
 			}
 			if status == "MATCHED" || status == "FILLED" {
 				slog.Info("take-profit filled",
-					"tokenID", pos.TokenID,
+					"side", pos.Side,
 					"tpOrderID", pos.TPOrderID,
-					"status", status,
+					"pnl%", fmt.Sprintf("+%.1f%%", pnlPct*100),
 				)
-				// Position closed — don't add to remaining
-				continue
+				continue // position closed
 			}
 		}
 
