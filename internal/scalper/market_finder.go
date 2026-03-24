@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -39,15 +40,22 @@ type gammaMarket struct {
 	EndDate         string  `json:"endDate"`
 	AcceptingOrders bool    `json:"acceptingOrders"`
 	OrderMinSize    float64 `json:"orderMinSize"`
+	Question        string  `json:"question"`
 }
 
 // gammaEvent is the Gamma API event response wrapper.
 type gammaEvent struct {
+	Title     string        `json:"title"`
 	EndDate   string        `json:"endDate"`
 	StartTime string        `json:"startTime"`
 	Active    bool          `json:"active"`
 	Closed    bool          `json:"closed"`
 	Markets   []gammaMarket `json:"markets"`
+}
+
+// containsStr checks if s contains substr.
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > 0 && strings.Contains(s, substr))
 }
 
 // FindActive fetches the current active BTC 5m market via Gamma events endpoint.
@@ -85,6 +93,13 @@ func (f *MarketFinder) FindActive(ctx context.Context) (*ActiveMarket, error) {
 		if e.Closed {
 			continue
 		}
+
+		// Parse event start time for duration check
+		startTime, err := time.Parse(time.RFC3339, e.StartTime)
+		if err != nil {
+			startTime, _ = time.Parse("2006-01-02T15:04:05Z", e.StartTime)
+		}
+
 		for _, m := range e.Markets {
 			if !m.AcceptingOrders {
 				continue
@@ -113,6 +128,30 @@ func (f *MarketFinder) FindActive(ctx context.Context) (*ActiveMarket, error) {
 				continue
 			}
 
+			// Filter: must be a short-duration market (≤ 10 minutes)
+			if !startTime.IsZero() {
+				duration := endTime.Sub(startTime)
+				if duration > 10*time.Minute {
+					continue
+				}
+			}
+
+			// Filter: must be BTC/Bitcoin market (not ETH, SOL, DOGE, etc.)
+			title := e.Title
+			if title == "" {
+				title = m.Question
+			}
+			isBTC := false
+			for _, kw := range []string{"Bitcoin", "BTC", "bitcoin", "btc"} {
+				if len(title) >= len(kw) && containsStr(title, kw) {
+					isBTC = true
+					break
+				}
+			}
+			if !isBTC {
+				continue
+			}
+
 			return &ActiveMarket{
 				ConditionID:     m.ConditionID,
 				TokenIDUp:       tokenIDs[0],
@@ -124,5 +163,5 @@ func (f *MarketFinder) FindActive(ctx context.Context) (*ActiveMarket, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("no active accepting-orders market found for series %q", f.seriesSlug)
+	return nil, fmt.Errorf("no active BTC 5m market found for series %q", f.seriesSlug)
 }
