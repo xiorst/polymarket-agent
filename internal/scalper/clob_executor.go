@@ -204,11 +204,16 @@ func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcA
 	// Round price to 2 decimal places (tick size 0.01)
 	price = math.Round(price*100) / 100
 
-	// makerAmount = USDC (6 decimals)
-	makerAmtInt := int64(usdcAmount * 1e6)
-	// takerAmount = shares = USDC / price (6 decimals), rounded down
-	takerAmtRaw := (usdcAmount / price) * 1e6
-	takerAmtInt := int64(math.Floor(takerAmtRaw))
+	// makerAmount = USDC, max 2 decimal places in USDC units
+	// e.g. $1.00 → 1000000, $1.50 → 1500000
+	makerUsdc := math.Round(usdcAmount*100) / 100
+	makerAmtInt := int64(makerUsdc * 1e6)
+
+	// takerAmount = shares = USDC / price, max 4 decimal places in share units
+	// e.g. 1/0.37 = 2.702702... → 2.7027 → 2702700
+	takerShares := usdcAmount / price
+	takerShares = math.Round(takerShares*10000) / 10000
+	takerAmtInt := int64(takerShares * 1e6)
 
 	o := &OrderStruct{
 		Salt:          saltVal,
@@ -220,9 +225,9 @@ func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcA
 		TakerAmount:   big.NewInt(takerAmtInt),
 		Expiration:    big.NewInt(0),
 		Nonce:         big.NewInt(0),
-		FeeRateBps:    big.NewInt(0),
-		Side:          0, // BUY = 0
-		SignatureType: 1, // POLY_PROXY = 1 (OAuth/Proxy wallet)
+		FeeRateBps:    big.NewInt(1000), // taker fee 10% = 1000 bps
+		Side:          0,               // BUY = 0
+		SignatureType: 1,               // POLY_PROXY = 1 (OAuth/Proxy wallet)
 	}
 
 	sig, err := signOrder(o, e.cfg.PrivateKey)
@@ -240,8 +245,8 @@ func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcA
 		"takerAmount":   strconv.FormatInt(takerAmtInt, 10),
 		"expiration":    "0",
 		"nonce":         "0",
-		"feeRateBps":    "0",
-		"side":          "BUY", // string per Polymarket JSON spec
+		"feeRateBps":    "1000", // taker fee 10% = 1000 bps
+		"side":          "BUY",  // string per Polymarket JSON spec
 		"signatureType": 1,     // POLY_PROXY
 		"signature":     sig,
 	}
@@ -271,25 +276,59 @@ func (e *CLOBExecutor) PlaceMarketBuy(ctx context.Context, tokenID string, usdcA
 }
 
 // PlaceLimitSell places a GTC limit sell order.
+// SELL: makerAmount = shares (6 dec), takerAmount = shares * price (6 dec)
 func (e *CLOBExecutor) PlaceLimitSell(ctx context.Context, tokenID string, shares float64, price float64) (*OrderResult, error) {
-	makerAmt := strconv.FormatInt(int64(shares*1e6), 10)
-	takerAmt := strconv.FormatInt(int64(price*shares*1e6), 10)
-	salt := rand.Int63() //nolint:gosec
+	saltVal := big.NewInt(rand.Int63()) //nolint:gosec
+
+	tokenIDBig, ok := new(big.Int).SetString(tokenID, 10)
+	if !ok {
+		return nil, fmt.Errorf("invalid tokenID: %s", tokenID)
+	}
+
+	// Round price to 2 decimal places
+	price = math.Round(price*100) / 100
+
+	// makerAmount = shares, max 4 decimal places
+	sharesRounded := math.Round(shares*10000) / 10000
+	makerAmtInt := int64(sharesRounded * 1e6)
+	// takerAmount = shares * price = USDC received, max 2 decimal places
+	takerUsdc := math.Round(sharesRounded*price*100) / 100
+	takerAmtInt := int64(takerUsdc * 1e6)
+
+	o := &OrderStruct{
+		Salt:          saltVal,
+		Maker:         common.HexToAddress(e.cfg.BuilderAddress),
+		Signer:        common.HexToAddress(e.cfg.SignerAddress),
+		Taker:         common.HexToAddress("0x0000000000000000000000000000000000000000"),
+		TokenID:       tokenIDBig,
+		MakerAmount:   big.NewInt(makerAmtInt),
+		TakerAmount:   big.NewInt(takerAmtInt),
+		Expiration:    big.NewInt(0),
+		Nonce:         big.NewInt(0),
+		FeeRateBps:    big.NewInt(0), // maker fee = 0
+		Side:          1,             // SELL = 1
+		SignatureType: 1,             // POLY_PROXY
+	}
+
+	sig, err := signOrder(o, e.cfg.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("sign order: %w", err)
+	}
 
 	order := map[string]interface{}{
-		"salt":          strconv.FormatInt(salt, 10),
-		"maker":         e.cfg.BuilderAddress,
-		"signer":        e.cfg.SignerAddress,
+		"salt":          saltVal.Int64(),
+		"maker":         strings.ToLower(e.cfg.BuilderAddress),
+		"signer":        strings.ToLower(e.cfg.SignerAddress),
 		"taker":         "0x0000000000000000000000000000000000000000",
 		"tokenId":       tokenID,
-		"makerAmount":   makerAmt,
-		"takerAmount":   takerAmt,
+		"makerAmount":   strconv.FormatInt(makerAmtInt, 10),
+		"takerAmount":   strconv.FormatInt(takerAmtInt, 10),
 		"expiration":    "0",
 		"nonce":         "0",
 		"feeRateBps":    "0",
 		"side":          "SELL",
-		"signatureType": 2,
-		"signature":     "0x",
+		"signatureType": 1, // POLY_PROXY
+		"signature":     sig,
 	}
 
 	payload := map[string]interface{}{
